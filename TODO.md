@@ -1,0 +1,9 @@
+- [x] Define constants for operating hours, transition times, etc.
+- [x] Create helper functions for time calculations and availability checks.
+- [x] Implement Middles block assignment.
+- [x] Implement 90-minute session assignment.
+- [x] Implement supervision assignment.
+- [x] Implement gap filling.
+- [x] Update generateSchedule to use new algorithm.
+- [x] Test the implementation.
+- [x] Add CSV bulk import for trainers and students in admin panel.

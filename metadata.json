@@ -1,0 +1,5 @@
+{
+  "name": "OptiSchedule AI",
+  "description": "An intelligent SaaS scheduler for clinics that matches trainers and kids based on certification, availability, and quota requirements using Gemini AI.",
+  "requestFramePermissions": []
+}
