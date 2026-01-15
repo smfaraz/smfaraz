@@ -71,8 +71,10 @@ const DURATION_CHOICES = [MAX_SESSION_MINS, MIN_SESSION_MINS] as const;
 // Full-time first (DB driven)
 const isFullTime = (trainer: Trainer) => (trainer as any).is_full_time === true;
 
-// 🔥 NEW CONSTRAINT: force rotation (don’t repeat same kid back-to-back for a trainer)
-const ROTATE_KID_AFTER_SESSION = true;
+// 🔥 NEW RULE: Full-timers should be assigned the whole day if they are coming
+// Meaning: If any full-time staff is present in the clinic today, use ONLY full-time staff for clinic sessions.
+// Part-timers are used only if NO full-timers are available that day.
+const FULL_TIME_ONLY_IF_PRESENT = true;
 
 const isCandidateValid = (
   trainer: Trainer,
@@ -81,16 +83,9 @@ const isCandidateValid = (
   time: number,
   duration: number,
   trainerHistory: Set<string>,
-  lastLocations: LocationTracker,
-  lastKidForTrainer: Map<string, string>
+  lastLocations: LocationTracker
 ): boolean => {
   const rules = trainer.rules || {};
-
-  // 0. Rotation Constraint: Trainer should not get same kid back-to-back
-  if (ROTATE_KID_AFTER_SESSION) {
-    const lastKid = lastKidForTrainer.get(trainer.id);
-    if (lastKid && lastKid === kid.id) return false;
-  }
 
   // 1. Gender Block
   if (trainer.excludeClientGender && kid.gender) {
@@ -170,14 +165,6 @@ const pickBestWithTieBreak = (candidates: Trainer[], getScore: (t: Trainer) => n
   return best[Math.floor(Math.random() * best.length)];
 };
 
-// Full-time first wrapper
-const pickFullTimeFirst = (candidates: Trainer[], getScore: (t: Trainer) => number) => {
-  const fullTimers = candidates.filter(isFullTime);
-  const partTimers = candidates.filter((t) => !isFullTime(t));
-
-  return pickBestWithTieBreak(fullTimers.length > 0 ? fullTimers : partTimers, getScore);
-};
-
 const isTrainerFreeForDuration = (
   trainerId: string,
   day: DayOfWeek,
@@ -205,7 +192,7 @@ const isKidFreeForDuration = (
 };
 
 // ============================================================================
-// PART 3: SCHEDULER ENGINE (Rotation Enabled)
+// PART 3: SCHEDULER ENGINE (Full-Time Whole Day Rule)
 // ============================================================================
 
 export const generateSchedule = async (
@@ -229,9 +216,7 @@ export const generateSchedule = async (
     dailyWorkload.set(trainerId, (dailyWorkload.get(trainerId) || 0) + 1);
   };
 
-  const isBooked = (id: string, day: DayOfWeek, t: number) => {
-    return bookedMap.has(`${id}-${day}-${t}`);
-  };
+  const isBooked = (id: string, day: DayOfWeek, t: number) => bookedMap.has(`${id}-${day}-${t}`);
 
   const getTrainerDayHistory = (day: DayOfWeek, trainerId: string) => {
     if (!dailyHistory.has(day)) dailyHistory.set(day, new Map());
@@ -247,12 +232,7 @@ export const generateSchedule = async (
     const isWeekend = day === DayOfWeek.SAT || day === DayOfWeek.SUN;
 
     const lastLocations: LocationTracker = new Map();
-
-    // prevent mixing home kids into clinic sessions
     const homeKidsScheduled = new Set<string>();
-
-    // 🔥 Track last kid per trainer for rotation
-    const lastKidForTrainer = new Map<string, string>();
 
     const availableStaff = activeTrainers
       .map((t) => {
@@ -299,12 +279,14 @@ export const generateSchedule = async (
             sessionStart,
             duration,
             getTrainerDayHistory(day, staff.id),
-            lastLocations,
-            lastKidForTrainer
+            lastLocations
           )
         );
 
-        const selected = pickFullTimeFirst(candidates, (t) =>
+        // For HOME sessions we still allow both full-time and part-time (but score can favor full-time)
+        const fullTimers = candidates.filter(isFullTime);
+        const partTimers = candidates.filter((t) => !isFullTime(t));
+        const selected = pickBestWithTieBreak(fullTimers.length > 0 ? fullTimers : partTimers, (t) =>
           calculateScore(t, kid, sessionStart, undefined, dailyWorkload.get(t.id) || 0)
         );
 
@@ -316,9 +298,6 @@ export const generateSchedule = async (
 
         getTrainerDayHistory(day, selected.id).add(kid.id);
         lastLocations.set(selected.id, { time: sessionEnd, location: "HOME" });
-
-        // 🔥 Update rotation tracker
-        lastKidForTrainer.set(selected.id, kid.id);
 
         schedule.push({
           id: crypto.randomUUID(),
@@ -343,7 +322,14 @@ export const generateSchedule = async (
 
     // ---------------- PHASE 2: CLINIC SESSIONS ----------------
     const clinicKids = kidsToday.filter((k) => !k.avail.isHome && !homeKidsScheduled.has(k.id));
-    const clinicStaff = availableStaff.filter((t) => !t.shift.isHome);
+    const clinicStaffAll = availableStaff.filter((t) => !t.shift.isHome);
+
+    const fullTimeClinicStaff = clinicStaffAll.filter(isFullTime);
+    const partTimeClinicStaff = clinicStaffAll.filter((t) => !isFullTime(t));
+
+    // 🔥 If full-time staff exist today, ONLY use them for all clinic scheduling
+    const clinicStaff =
+      FULL_TIME_ONLY_IF_PRESENT && fullTimeClinicStaff.length > 0 ? fullTimeClinicStaff : clinicStaffAll;
 
     const kidIncumbents = new Map<string, string>();
     const consecutiveMinutes = new Map<string, number>();
@@ -371,7 +357,7 @@ export const generateSchedule = async (
           if (endTime > kid.avail.end) continue;
           if (currentDuration + duration > limit) continue;
 
-          // 1) Try to keep incumbent (ONLY if rotation allows it)
+          // 1) Keep incumbent (only if incumbent is in allowed clinicStaff list)
           if (incumbentId) {
             const incumbent = clinicStaff.find((t) => t.id === incumbentId);
             if (
@@ -387,8 +373,7 @@ export const generateSchedule = async (
                 time,
                 duration,
                 getTrainerDayHistory(day, incumbent.id),
-                lastLocations,
-                lastKidForTrainer
+                lastLocations
               )
             ) {
               selectedTrainer = incumbent;
@@ -397,7 +382,7 @@ export const generateSchedule = async (
             }
           }
 
-          // 2) Pick best candidate (full-time first)
+          // 2) Candidate selection (full-time whole day rule applied here)
           let candidates = clinicStaff.filter(
             (t) =>
               time >= t.shift.start &&
@@ -415,12 +400,11 @@ export const generateSchedule = async (
               time,
               duration,
               getTrainerDayHistory(day, t.id),
-              lastLocations,
-              lastKidForTrainer
+              lastLocations
             )
           );
 
-          const picked = pickFullTimeFirst(candidates, (t) =>
+          const picked = pickBestWithTieBreak(candidates, (t) =>
             calculateScore(t, kid, time, incumbentId, dailyWorkload.get(t.id) || 0)
           );
 
@@ -445,9 +429,6 @@ export const generateSchedule = async (
 
           const current = consecutiveMinutes.get(kid.id) || 0;
           consecutiveMinutes.set(kid.id, current + selectedDuration);
-
-          // 🔥 Update rotation tracker
-          lastKidForTrainer.set(selectedTrainer.id, kid.id);
 
           schedule.push({
             id: crypto.randomUUID(),
