@@ -1,106 +1,158 @@
 import React, { useState, useMemo } from 'react';
-import { ScheduleItem, DayOfWeek, Trainer, Kid } from '../types';
-import { CalendarIcon, EditIcon, TrashIcon, UserIcon, SparklesIcon, UserGroupIcon } from './Icons';
+import { ScheduleItem, DayOfWeek, Trainer, Kid, SessionType } from '../types';
+import { EditIcon, TrashIcon, UserIcon, UserGroupIcon, SparklesIcon, DocumentUploadIcon, LockIcon } from './Icons';
+import { generateLegacyCSV, downloadCSV } from '../services/csvExportService';
 
 interface Props {
   schedule: ScheduleItem[];
   trainers: Trainer[];
   kids: Kid[];
   isLoading: boolean;
+  lockedDays: DayOfWeek[];
+  onToggleLock: (day: DayOfWeek) => void;
   onUpdateItem: (id: string, updates: Partial<ScheduleItem>) => void;
   onDeleteItem: (id: string) => void;
 }
 
-// Helper to convert "08:00 AM" or "01:00 PM" into minutes for sorting
+// --- HELPER: Sort by Start Time ---
 const parseTimeValue = (timeStr: string): number => {
+  if (timeStr === "In-Home" || timeStr === "All Day") return -1; 
   if (!timeStr) return 0;
   const [time, period] = timeStr.split(' ');
-  let [hours, minutes] = time.split(':').map(Number);
+  if (!time || !period) return 0;
   
-  // Handle 12 PM (Noon) vs 12 AM (Midnight)
+  let [hours, minutes] = time.split(':').map(Number);
+  if (isNaN(hours) || isNaN(minutes)) return 0;
   if (period === 'PM' && hours !== 12) hours += 12;
   if (period === 'AM' && hours === 12) hours = 0;
-  
   return hours * 60 + minutes;
 };
 
-const DayColumn: React.FC<{ 
-  day: DayOfWeek; 
-  items: ScheduleItem[]; 
+// --- HELPER: Format Range ---
+const formatTimeRange = (startStr: string, durationMins: number): string => {
+  if (!startStr || startStr.startsWith("In-Home") || startStr.includes("All Day")) return startStr;
+  const [time, period] = startStr.split(' ');
+  if (!time || !period) return startStr;
+  let [hours, minutes] = time.split(':').map(Number);
+  if (isNaN(hours) || isNaN(minutes)) return startStr;
+  if (period === 'PM' && hours !== 12) hours += 12;
+  if (period === 'AM' && hours === 12) hours = 0;
+  
+  const startTotalMins = hours * 60 + minutes;
+  const endTotalMins = startTotalMins + durationMins;
+  let endH = Math.floor(endTotalMins / 60);
+  const endM = endTotalMins % 60;
+  const endPeriod = endH >= 12 ? 'PM' : 'AM';
+  if (endH > 12) endH -= 12;
+  if (endH === 0) endH = 12;
+
+  return `${startStr} - ${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')} ${endPeriod}`;
+};
+
+const CompactSessionCard: React.FC<{
+  item: ScheduleItem;
   onEdit: (item: ScheduleItem) => void;
   onDelete: (id: string) => void;
-}> = ({ day, items, onEdit, onDelete }) => {
-  // FIXED: Sort by numeric time value, not alphabetical string
-  const sortedItems = useMemo(() => {
-    return [...items].sort((a, b) => parseTimeValue(a.timeSlot) - parseTimeValue(b.timeSlot));
-  }, [items]);
+}> = ({ item, onEdit, onDelete }) => {
+  
+  const isHome = item.sessionType === SessionType.HOME;
+  const isBreak = item.sessionType === SessionType.BREAK;
 
-  return (
-    <div className="w-[80vw] sm:w-[320px] lg:w-[350px] flex-shrink-0 flex flex-col gap-6 snap-center lg:snap-start">
-      <div className="glass-panel py-4 rounded-[2rem] text-center border border-zinc-200 dark:border-white/10 shadow-md bg-white/80 dark:bg-black/80">
-        <span className="font-black text-[10px] lg:text-xs uppercase tracking-[0.4em] dark:text-white">{day}</span>
+  if (isBreak) {
+    return (
+      <div className="group relative border-2 border-dashed border-zinc-300 dark:border-zinc-700 rounded-xl p-3 bg-zinc-50 dark:bg-zinc-800/50 flex flex-col items-center justify-center gap-1 cursor-default opacity-60 hover:opacity-100 transition-all">
+        <span className="text-xs font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-[0.2em]">BREAK</span>
+        <span className="text-[10px] font-bold text-zinc-400/70">{formatTimeRange(item.timeSlot, item.durationMins)}</span>
       </div>
+    );
+  }
+  
+  return (
+    <div className={`group relative border rounded-xl p-2.5 transition-all cursor-pointer shadow-sm
+      ${isHome 
+        ? 'bg-orange-50 border-orange-200 dark:bg-orange-900/20 dark:border-orange-800' 
+        : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:shadow-md hover:border-brand-500/50'
+    }`} onClick={() => onEdit(item)}>
       
-      <div className="space-y-6 flex-1 min-h-[500px]">
-        {sortedItems.length === 0 ? (
-          <div className="glass-panel h-full flex flex-col items-center justify-center rounded-[3rem] border-dashed border-zinc-200 dark:border-zinc-800 opacity-40 p-8 transition-all hover:opacity-60 group bg-zinc-50 dark:bg-zinc-900/50">
-            <div className="p-4 bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl mb-6 group-hover:scale-110 transition-transform">
-              <SparklesIcon className="w-8 h-8 text-zinc-400" />
-            </div>
-            <p className="text-[9px] font-black text-zinc-400 uppercase tracking-[0.3em] text-center leading-loose">No Active Sessions</p>
-          </div>
-        ) : (
-          sortedItems.map(item => (
-            <div key={item.id} className="glass-panel p-6 lg:p-8 rounded-[2.5rem] bg-white dark:bg-zinc-900 hover:scale-[1.01] transition-all hover:shadow-xl hover:border-brand-500/40 relative overflow-hidden group/card border border-zinc-200 dark:border-white/10 shadow-lg">
-              <div className="absolute top-0 left-0 w-1.5 h-full bg-brand-600 opacity-60" />
-              
-              <div className="flex justify-between items-start mb-6">
-                <div>
-                  <span className="font-black text-xl lg:text-2xl tracking-tighter leading-none dark:text-white block mb-1">{item.timeSlot}</span>
-                  <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">{item.durationMins}m Session</p>
-                </div>
-                <span className={`px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors ${
-                  item.status === 'Confirmed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 border-zinc-200 dark:border-zinc-700'
-                }`}>
-                  {item.status}
-                </span>
-              </div>
+      <div className={`absolute left-0 top-2 bottom-2 w-1.5 rounded-r-full ${
+        isHome ? 'bg-orange-400' :
+        item.status === 'Confirmed' ? 'bg-emerald-500' : 
+        item.status === 'Pending' ? 'bg-amber-400' : 
+        'bg-rose-500'
+      }`} />
 
-              <div className="space-y-3 mb-8">
-                <h5 className="font-black text-lg lg:text-xl tracking-tight uppercase truncate leading-none dark:text-white">{item.kidName}</h5>
-                <div className="flex items-center gap-2">
-                   <div className="w-1.5 h-1.5 bg-brand-600 rounded-full shadow-[0_0_8px_rgba(124,58,237,0.5)]" />
-                   <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">{item.specialty}</p>
-                </div>
-              </div>
+      <div className="pl-2.5 flex flex-col gap-1">
+        <div className="flex justify-between items-center">
+          <span className={`font-black text-xs tracking-tight whitespace-nowrap ${isHome ? 'text-orange-900 dark:text-orange-100' : 'text-zinc-700 dark:text-zinc-200'}`}>
+            {formatTimeRange(item.timeSlot, item.durationMins)}
+          </span>
+        </div>
 
-              <div className="flex items-center justify-between border-t border-zinc-100 dark:border-zinc-800 pt-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-brand-500/10 rounded-xl flex items-center justify-center border border-brand-500/20">
-                    <UserIcon className="w-5 h-5 text-brand-600" />
-                  </div>
-                  <div>
-                    <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest mb-0.5">Provider</p>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-800 dark:text-zinc-200 truncate max-w-[80px]">{item.trainerName}</p>
-                  </div>
-                </div>
-                <div className="flex gap-1.5">
-                  <button onClick={() => onEdit(item)} className="p-3 bg-zinc-100 dark:bg-zinc-800 rounded-xl text-zinc-400 hover:text-brand-600 transition-all"><EditIcon className="w-4 h-4" /></button>
-                  <button onClick={() => onDelete(item.id)} className="p-3 bg-zinc-100 dark:bg-zinc-800 rounded-xl text-zinc-400 hover:text-rose-500 transition-all"><TrashIcon className="w-4 h-4" /></button>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
+        <div className="flex items-center gap-1.5 truncate">
+          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isHome ? 'bg-orange-400' : 'bg-black'}`} />
+          <span className={`font-black text-xs truncate ${isHome ? 'text-orange-800 dark:text-orange-200' : 'text-indigo-700 dark:text-indigo-300'}`}>
+            {item.kidName}
+          </span>
+        </div>
+
+        <div className="flex justify-between items-center mt-0.5">
+          <span className={`text-xs font-bold truncate max-w-[80px] ${isHome ? 'text-orange-700 dark:text-orange-300' : 'text-black-700 dark:text-fuchsia-400'}`}>
+            {item.trainerName}
+          </span>
+          <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${
+            isHome ? 'bg-orange-200 text-orange-700' : 'text-black dark:text-teal-400 bg-zinc-100 dark:bg-zinc-800'
+          }`}>
+            {isHome ? 'HOME' : item.sessionType.slice(0, 3)}
+          </span>
+        </div>
       </div>
     </div>
   );
 };
 
-export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoading, onUpdateItem, onDeleteItem }) => {
+const DayColumn: React.FC<{ 
+  day: DayOfWeek; 
+  items: ScheduleItem[]; 
+  isLocked: boolean;
+  onToggleLock: () => void;
+  onEdit: (item: ScheduleItem) => void;
+  onDelete: (id: string) => void;
+}> = ({ day, items, isLocked, onToggleLock, onEdit, onDelete }) => {
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => parseTimeValue(a.timeSlot) - parseTimeValue(b.timeSlot));
+  }, [items]);
+
+  return (
+    <div className={`flex flex-col h-full rounded-2xl border overflow-hidden transition-colors ${
+      isLocked ? 'bg-zinc-100/80 border-zinc-300 dark:bg-zinc-900 dark:border-zinc-700' : 'bg-zinc-50/50 border-zinc-200/50 dark:bg-white/5 dark:border-white/5'
+    }`}>
+      <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-sm p-3 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center sticky top-0 z-10">
+        <div className="flex items-center gap-2">
+          <span className="font-black text-xs uppercase tracking-widest text-zinc-500 dark:text-zinc-400">{day}</span>
+          <span className="text-[10px] font-bold text-zinc-300 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded-full">{items.length}</span>
+        </div>
+        <button onClick={onToggleLock} className={`transition-colors ${isLocked ? 'text-rose-500' : 'text-zinc-300 hover:text-zinc-500'}`}>
+           <LockIcon className="w-4 h-4" />
+        </button>
+      </div>
+      
+      <div className="flex-1 p-2 space-y-2 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-200">
+        {sortedItems.map(item => (
+          <CompactSessionCard key={item.id} item={item} onEdit={onEdit} onDelete={onDelete} />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoading, lockedDays, onToggleLock, onUpdateItem, onDeleteItem }) => {
   const [editingItem, setEditingItem] = useState<ScheduleItem | null>(null);
   const [trainerFilter, setTrainerFilter] = useState<string>('all');
   const [kidFilter, setKidFilter] = useState<string>('all');
+  
+  const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
+  const currentDate = new Date();
+  currentDate.setDate(currentDate.getDate() + (currentWeekOffset * 7));
 
   const filteredItems = useMemo(() => {
     return schedule.filter(item => {
@@ -110,72 +162,37 @@ export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoad
     });
   }, [schedule, trainerFilter, kidFilter]);
 
-  if (isLoading) {
-    return (
-      <div className="glass-panel rounded-[3rem] min-h-[500px] flex flex-col items-center justify-center space-y-8 border-brand-500/20 bg-white/40 dark:bg-black/40 animate-in fade-in duration-500">
-        <div className="neural-ring scale-[1.2]"></div>
-        <div className="text-center space-y-4">
-          <h3 className="text-2xl lg:text-3xl font-black uppercase tracking-[0.4em] dark:text-white">Balancing</h3>
-          <p className="text-[9px] font-black text-brand-600 uppercase tracking-[0.2em] animate-pulse">Synchronizing Multi-Domain Clinical Constraints</p>
-        </div>
-      </div>
-    );
-  }
+  if (isLoading) return <div className="h-full flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-brand-500 rounded-full border-t-transparent"/></div>;
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-700">
-      <div className="flex flex-col md:flex-row items-center gap-4 px-4 lg:px-6">
-        <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="relative group">
-            <div className="absolute left-5 top-1/2 -translate-y-1/2 text-zinc-400 group-focus-within:text-brand-600 transition-colors">
-              <UserGroupIcon className="w-4 h-4" />
-            </div>
-            <select 
-              value={trainerFilter}
-              onChange={(e) => setTrainerFilter(e.target.value)}
-              className="w-full pl-12 pr-6 py-4 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl font-black text-[9px] uppercase tracking-widest outline-none focus:ring-4 ring-brand-500/10 transition-all dark:text-white appearance-none cursor-pointer"
-            >
-              <option value="all">All Clinical Providers</option>
-              {trainers.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="relative group">
-            <div className="absolute left-5 top-1/2 -translate-y-1/2 text-zinc-400 group-focus-within:text-brand-600 transition-colors">
-              <UserIcon className="w-4 h-4" />
-            </div>
-            <select 
-              value={kidFilter}
-              onChange={(e) => setKidFilter(e.target.value)}
-              className="w-full pl-12 pr-6 py-4 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl font-black text-[9px] uppercase tracking-widest outline-none focus:ring-4 ring-brand-500/10 transition-all dark:text-white appearance-none cursor-pointer"
-            >
-              <option value="all">All Student Roster</option>
-              {kids.map(k => (
-                <option key={k.id} value={k.id}>{k.name}</option>
-              ))}
-            </select>
-          </div>
-        </div>
+    <div className="flex flex-col h-[calc(100vh-140px)] animate-in fade-in duration-500">
+      <div className="flex flex-col xl:flex-row items-center justify-between gap-4 mb-4 px-1 shrink-0">
         
-        {(trainerFilter !== 'all' || kidFilter !== 'all') && (
-          <button 
-            onClick={() => { setTrainerFilter('all'); setKidFilter('all'); }}
-            className="text-[9px] font-black uppercase tracking-widest text-zinc-400 hover:text-brand-600 transition-colors px-3 py-1"
-          >
-            Clear Filters
-          </button>
-        )}
+        <div className="flex items-center gap-4 bg-white dark:bg-zinc-900 p-2 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+          <button onClick={() => setCurrentWeekOffset(c => c - 1)} className="p-2 hover:bg-zinc-100 rounded-lg text-xs font-bold">←</button>
+          <div className="text-center">
+            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Viewing Week Of</p>
+            <p className="text-sm font-bold dark:text-white">{currentDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+          </div>
+          <button onClick={() => setCurrentWeekOffset(c => c + 1)} className="p-2 hover:bg-zinc-100 rounded-lg text-xs font-bold">→</button>
+        </div>
+
+        <div className="flex items-center gap-3">
+            <select value={trainerFilter} onChange={e => setTrainerFilter(e.target.value)} className="p-2 bg-white border border-zinc-200 rounded-lg text-xs font-bold uppercase"><option value="all">All Staff</option>{trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+            <select value={kidFilter} onChange={e => setKidFilter(e.target.value)} className="p-2 bg-white border border-zinc-200 rounded-lg text-xs font-bold uppercase"><option value="all">All Kids</option>{kids.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}</select>
+            <button onClick={() => {const csv = generateLegacyCSV(schedule, trainers); downloadCSV(csv, 'schedule.csv');}} className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 shadow-lg shadow-emerald-500/20"><DocumentUploadIcon className="w-3 h-3"/> Export</button>
+        </div>
       </div>
 
-      <div className="relative overflow-x-auto pb-12 cursor-grab active:cursor-grabbing snap-x snap-mandatory scrollbar-hide scroll-smooth">
-        <div className="flex gap-6 min-w-max px-4 lg:px-6">
+      <div className="flex-1 min-h-0 overflow-x-auto">
+        <div className="grid grid-cols-7 gap-3 h-full min-w-[1200px] pb-2">
           {Object.values(DayOfWeek).map(day => (
             <DayColumn 
               key={day} 
               day={day} 
               items={filteredItems.filter(s => s.day === day)} 
+              isLocked={lockedDays.includes(day)}
+              onToggleLock={() => onToggleLock(day)}
               onEdit={setEditingItem}
               onDelete={onDeleteItem}
             />
@@ -184,30 +201,44 @@ export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoad
       </div>
 
       {editingItem && (
-        <div className="fixed inset-0 z-[1000] bg-zinc-950/80 backdrop-blur-3xl flex items-center justify-center p-4 animate-in fade-in duration-300">
-          <div className="glass-panel w-full max-w-md rounded-[3rem] overflow-hidden border border-white/20 p-8 bg-white/95 dark:bg-zinc-900/95 shadow-2xl scale-in-center">
-            <div className="flex justify-between items-center mb-8">
-               <h3 className="text-xl font-black tracking-tighter uppercase dark:text-white">Slot Override</h3>
-               <button onClick={() => setEditingItem(null)} className="text-zinc-400 hover:text-rose-500 text-4xl font-light leading-none transition-colors">&times;</button>
-            </div>
-            
-            <div className="space-y-8">
-               <div className="space-y-3">
-                  <label className="text-[9px] font-black text-zinc-400 uppercase tracking-[0.3em] ml-1">Clinical Verification</label>
+        <div className="fixed inset-0 z-[1000] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 w-full max-w-sm rounded-2xl shadow-2xl p-6 border border-zinc-200 animate-in zoom-in-95">
+            <h3 className="text-sm font-black uppercase tracking-widest mb-4">Edit Session</h3>
+            <div className="space-y-4">
+               <div>
+                  <label className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1 block">Assigned Technician</label>
                   <select 
-                      className="w-full p-6 bg-zinc-100 dark:bg-black/60 border border-zinc-200 dark:border-zinc-800 rounded-[2rem] font-black text-xs uppercase tracking-widest outline-none focus:ring-4 ring-brand-500/20 transition-all dark:text-white"
-                      value={editingItem.status}
-                      onChange={(e) => setEditingItem({...editingItem, status: e.target.value as any})}
+                     className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-xs font-bold outline-none"
+                     value={editingItem.trainerId}
+                     onChange={(e) => {
+                        const t = trainers.find(tr => tr.id === e.target.value);
+                        setEditingItem({...editingItem, trainerId: e.target.value, trainerName: t ? t.name : 'Unknown'});
+                     }}
                   >
-                    <option value="Pending">Awaiting Authorization</option>
-                    <option value="Confirmed">Authorize Session</option>
-                    <option value="Cancelled">Void Time Slot</option>
+                     {trainers.map(t => <option key={t.id} value={t.id}>{t.name} ({t.clinicalRole})</option>)}
                   </select>
                </div>
-               
-               <div className="pt-4 flex flex-col gap-3">
-                 <button onClick={() => { onUpdateItem(editingItem.id, editingItem); setEditingItem(null); }} className="w-full py-5 bg-brand-600 text-white rounded-[2rem] font-black uppercase tracking-[0.2em] text-[10px] shadow-xl shadow-brand-500/40 hover:bg-brand-700 transition-all">Apply Override</button>
-                 <button onClick={() => setEditingItem(null)} className="w-full py-5 bg-zinc-100 dark:bg-zinc-800 text-zinc-500 rounded-[2rem] font-black uppercase tracking-[0.2em] text-[10px] hover:text-zinc-800 dark:hover:text-zinc-200 transition-all">Discard</button>
+               <div>
+                 <label className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1 block">Duration (Mins)</label>
+                 <input 
+                   type="number" 
+                   value={editingItem.durationMins} 
+                   onChange={(e) => setEditingItem({...editingItem, durationMins: parseInt(e.target.value)})} 
+                   className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-xs font-bold"
+                 />
+               </div>
+               <div>
+                  <label className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1 block">Status</label>
+                  <select className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-xs font-bold" value={editingItem.status} onChange={(e) => setEditingItem({...editingItem, status: e.target.value as any})}>
+                    <option value="Pending">Pending</option>
+                    <option value="Confirmed">Confirmed</option>
+                    <option value="Cancelled">Cancelled</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+               </div>
+               <div className="grid grid-cols-2 gap-2 pt-2">
+                 <button onClick={() => { onUpdateItem(editingItem.id, editingItem); setEditingItem(null); }} className="py-3 bg-brand-600 text-white rounded-lg font-bold text-[10px] uppercase tracking-widest hover:bg-brand-700">Save Changes</button>
+                 <button onClick={() => setEditingItem(null)} className="py-3 bg-zinc-100 text-zinc-500 rounded-lg font-bold text-[10px] uppercase tracking-widest hover:bg-zinc-200">Cancel</button>
                </div>
             </div>
           </div>

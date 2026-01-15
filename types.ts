@@ -1,7 +1,8 @@
 export enum Role {
   DIRECTOR = 'Director',
   STAFF = 'Staff',
-  PARENT = 'Parent'
+  PARENT = 'Parent',
+  KIOSK = 'Kiosk'
 }
 
 export enum ClinicalRole {
@@ -11,11 +12,7 @@ export enum ClinicalRole {
   BCBA = 'BCBA'
 }
 
-export enum Crew {
-  ALPHA = 'Alpha',
-  BRAVO = 'Bravo',
-  CHARLIE = 'Charlie'
-}
+// REMOVED: export enum Crew { ... }
 
 export enum Specialty {
   SPEECH = 'Speech Therapy',
@@ -31,7 +28,10 @@ export enum SessionType {
   OBSERVE = 'Observation (97151)',
   OFFICE = 'Office Work',
   BREAK = 'Break',
-  TRAINING = 'Training'
+  TRAINING = 'Training',
+  HOME = 'In-Home Session',
+  ADMIN = 'Admin / Cleaning',
+  ABSENT = 'Client Absent'
 }
 
 export enum DayOfWeek {
@@ -39,7 +39,9 @@ export enum DayOfWeek {
   TUE = 'Tuesday',
   WED = 'Wednesday',
   THU = 'Thursday',
-  FRI = 'Friday'
+  FRI = 'Friday',
+  SAT = 'Saturday',
+  SUN = 'Sunday'
 }
 
 export enum StaffStatus {
@@ -51,37 +53,50 @@ export enum StaffStatus {
 export enum SessionStatus {
   PENDING = 'Pending',
   CONFIRMED = 'Confirmed',
-  CANCELLED = 'Cancelled'
+  CANCELLED = 'Cancelled',
+  COMPLETED = 'Completed'
 }
 
+export type WeeklySchedule = {
+  [key in DayOfWeek]?: string; 
+};
+
 export interface Trainer {
+  rules: {};
   id: string;
   name: string;
   username: string;
   password: string;
   clinicalRole: ClinicalRole;
-  crew: Crew;
+  // REMOVED: crew: Crew;
   specialties: Specialty[];
   maxHoursPerWeek: number;
-  shiftStart: string;
-  shiftEnd: string;
-  availableDays: DayOfWeek[];
+  shifts: WeeklySchedule; 
   type: 'Full-Time' | 'Contract';
   status: StaffStatus;
+  excludeClientGender?: string;
+  maxDailyHours?: number;
 }
 
 export interface Kid {
+  demands: {};
   id: string;
   name: string;
   parentUsername: string;
   parentPassword: string;
-  crew: Crew;
+  // REMOVED: crew: Crew;
   requiredSpecialties: Specialty[];
   sessionsPerWeek: number;
-  sessionDurationMins: 30 | 45 | 60 | 90;
+  sessionDurationMins: number;
   insuranceCapHours: number;
   insuranceUsedHours: number;
   supervisionGoalWeekly: number;
+  availability: WeeklySchedule;
+  currentStatus?: 'CHECKED_IN' | 'CHECKED_OUT';
+  gender?: string;
+  inHomeAllowedStaffIds?: string[]; 
+  maxSessionMins?: number;
+  conflictHistoryKids?: string[];
 }
 
 export interface ScheduleItem {
@@ -96,10 +111,22 @@ export interface ScheduleItem {
   sessionType: SessionType;
   durationMins: number;
   status: SessionStatus;
-  crew: Crew;
+  // REMOVED: crew: Crew;
+  isLocked?: boolean; 
 }
 
 export interface ChatMessage {
   role: 'user' | 'model';
   text: string;
+}
+
+export interface KioskLog {
+  id: string;
+  kidId: string;
+  kidName: string;
+  action: 'DROP_OFF' | 'PICK_UP';
+  timestamp: number;
+  dateStr: string;
+  photo?: string;
+  method: 'PIN' | 'BIOMETRIC';
 }

@@ -23,9 +23,11 @@ export const LandingPage: React.FC<Props> = ({ onInitiateLogin }) => {
           </div>
           
           <h1 className="text-6xl md:text-8xl lg:text-[10rem] font-black tracking-tighter leading-[0.8] uppercase dark:text-white transition-all duration-700 hover:tracking-[-0.05em]">
-            Clinic<br/>
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-pink-400 to-brand-600">Connect AI</span>
-          </h1>
+  Clinic<br/>
+  <span className="text-black dark:text-white">
+    Connect AI
+  </span>
+</h1>
 
           <p className="max-w-2xl mx-auto text-zinc-500 dark:text-zinc-400 text-lg md:text-xl font-medium leading-relaxed px-4">
             A hyper-intelligent scheduling ecosystem that synchronizes multi-specialty clinical domains with zero-latency conflict resolution.
@@ -40,7 +42,7 @@ export const LandingPage: React.FC<Props> = ({ onInitiateLogin }) => {
             </button>
             <button 
               onClick={() => onInitiateLogin('Director')}
-              className="px-10 py-5 bg-brand-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-2xl shadow-brand-500/40 hover:scale-105 active:scale-95 transition-all"
+              className="px-10 py-5 bg-black text-white dark:bg-white dark:text-black text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-2xl shadow-brand-500/40 hover:scale-105 active:scale-95 transition-all"
             >
               Initialize Access
             </button>
@@ -65,9 +67,9 @@ export const LandingPage: React.FC<Props> = ({ onInitiateLogin }) => {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-10">
             {[
-              { title: 'AI Matching', desc: 'Gemini 3.0 Pro logic ensures therapists are matched to students based on certification, availability, and clinical quotas.', icon: SparklesIcon, color: 'brand' },
-              { title: 'Auth Ledger', desc: 'Real-time insurance tracking prevents over-scheduling and ensures every session is pre-authorized by regional nodes.', icon: ChartBarIcon, color: 'pink' },
-              { title: 'Zero Conflict', desc: 'A sophisticated temporal buffer system ensures no physical overlap between providers or students across the entire facility.', icon: LockIcon, color: 'emerald' },
+              { title: 'AI Matching', desc: 'Gemini 3.0 Pro logic ensures therapists are matched to students based on certification, availability, and clinical quotas.', icon: SparklesIcon, color: 'black' },
+              { title: 'Auth Ledger', desc: 'Real-time insurance tracking prevents over-scheduling and ensures every session is pre-authorized by regional nodes.', icon: ChartBarIcon, color: 'black' },
+              { title: 'Zero Conflict', desc: 'A sophisticated temporal buffer system ensures no physical overlap between providers or students across the entire facility.', icon: LockIcon, color: 'black' },
             ].map((feat, i) => (
               <div key={i} className="glass-panel p-12 rounded-[3.5rem] border-zinc-200 dark:border-zinc-800 group hover:-translate-y-4 transition-all duration-500">
                 <div className={`w-16 h-16 bg-${feat.color}-500/10 rounded-2xl flex items-center justify-center mb-8 border border-${feat.color}-500/20 text-${feat.color}-500`}>

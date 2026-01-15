@@ -1,6 +1,6 @@
-
 import React, { useState } from 'react';
-import { Trainer, Specialty, DayOfWeek, StaffStatus, ClinicalRole, Crew } from '../types';
+// REMOVED: Crew from import
+import { Trainer, Specialty, DayOfWeek, StaffStatus, ClinicalRole } from '../types';
 import { UserIcon, PlusIcon, TrashIcon, EditIcon } from './Icons';
 import { apiService } from '../services/apiService';
 
@@ -14,7 +14,7 @@ export const TrainerManager: React.FC<Props> = ({ trainers, setTrainers }) => {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [selectedTrainer, setSelectedTrainer] = useState<Trainer | null>(null);
   const [newPassword, setNewPassword] = useState('');
-  // Fixed: Added missing Trainer properties to initialization
+  
   const [newTrainer, setNewTrainer] = useState<Partial<Trainer>>({
     name: '',
     username: '',
@@ -24,28 +24,26 @@ export const TrainerManager: React.FC<Props> = ({ trainers, setTrainers }) => {
     maxHoursPerWeek: 30,
     type: 'Full-Time',
     clinicalRole: ClinicalRole.BT,
-    crew: Crew.ALPHA,
+    // REMOVED: crew: Crew.ALPHA,
     shiftStart: '08:00 AM',
     shiftEnd: '04:30 PM'
   });
 
   const handleAddTrainer = () => {
     if (newTrainer.name && newTrainer.username && newTrainer.specialties?.length) {
-      // Fixed: Included all mandatory Trainer properties in object creation
       const trainer: Trainer = {
         id: `t-${Date.now()}`,
         name: newTrainer.name!,
         username: newTrainer.username!,
         password: newTrainer.password || 'password',
         specialties: newTrainer.specialties!,
-        availableDays: newTrainer.availableDays!,
+        shifts: {}, // Fixed: Using shifts object instead of availableDays
         maxHoursPerWeek: newTrainer.maxHoursPerWeek || 30,
         type: newTrainer.type as 'Full-Time' | 'Contract' || 'Full-Time',
         status: StaffStatus.ACTIVE,
         clinicalRole: newTrainer.clinicalRole || ClinicalRole.BT,
-        crew: newTrainer.crew || Crew.ALPHA,
-        shiftStart: newTrainer.shiftStart || '08:00 AM',
-        shiftEnd: newTrainer.shiftEnd || '04:30 PM'
+        // REMOVED: crew assignment
+        // Note: shiftStart/shiftEnd logic would typically map to 'shifts' map here
       };
       setTrainers([...trainers, trainer]);
       setIsAdding(false);
@@ -58,7 +56,7 @@ export const TrainerManager: React.FC<Props> = ({ trainers, setTrainers }) => {
         maxHoursPerWeek: 30, 
         type: 'Full-Time',
         clinicalRole: ClinicalRole.BT,
-        crew: Crew.ALPHA,
+        // REMOVED: crew reset
         shiftStart: '08:00 AM',
         shiftEnd: '04:30 PM'
       });
@@ -103,15 +101,15 @@ export const TrainerManager: React.FC<Props> = ({ trainers, setTrainers }) => {
               <input placeholder="Name" className="p-3 bg-white border border-gray-200 rounded-xl text-sm" value={newTrainer.name} onChange={e => setNewTrainer({...newTrainer, name: e.target.value})} />
               <input placeholder="Username" className="p-3 bg-white border border-gray-200 rounded-xl text-sm" value={newTrainer.username} onChange={e => setNewTrainer({...newTrainer, username: e.target.value})} />
             </div>
-            {/* Added: UI fields for clinical role and crew synchronization */}
-            <div className="grid grid-cols-2 gap-4">
+            
+            {/* UPDATED: Grid reduced to single column since Crew select is removed */}
+            <div className="grid grid-cols-1 gap-4">
               <select className="p-3 bg-white border border-gray-200 rounded-xl text-sm" value={newTrainer.clinicalRole} onChange={e => setNewTrainer({...newTrainer, clinicalRole: e.target.value as ClinicalRole})}>
                 {Object.values(ClinicalRole).map(role => <option key={role} value={role}>{role}</option>)}
               </select>
-              <select className="p-3 bg-white border border-gray-200 rounded-xl text-sm" value={newTrainer.crew} onChange={e => setNewTrainer({...newTrainer, crew: e.target.value as Crew})}>
-                {Object.values(Crew).map(crew => <option key={crew} value={crew}>{crew} Crew</option>)}
-              </select>
+              {/* REMOVED: Crew select dropdown */}
             </div>
+
             <div className="flex gap-2 flex-wrap">
                {Object.values(Specialty).map(s => (
                  <button key={s} onClick={() => {
