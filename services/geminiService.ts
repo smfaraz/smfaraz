@@ -5,7 +5,6 @@ import { apiService } from "./apiService";
 // PART 1: HELPER FUNCTIONS (Time & Parsing)
 // ============================================================================
 
-// Helper to convert "08:00 AM" -> 480
 const parseTimeStr = (t: string): number => {
   if (!t) return 0;
   const upper = t.toUpperCase();
@@ -64,12 +63,16 @@ type LocationTracker = Map<string, { time: number; location: "CLINIC" | "HOME"; 
 
 const TRAVEL_BUFFER_MINS = 30;
 
-// ✅ Duration rules: MIN 1 hour, MAX 2 hours
+// Session timing constraints
 const MIN_SESSION_MINS = 60;
 const MAX_SESSION_MINS = 120;
-
-// We try longer first, fallback to shorter
 const DURATION_CHOICES = [MAX_SESSION_MINS, MIN_SESSION_MINS] as const;
+
+// Full-time first (DB driven)
+const isFullTime = (trainer: Trainer) => (trainer as any).is_full_time === true;
+
+// 🔥 NEW CONSTRAINT: force rotation (don’t repeat same kid back-to-back for a trainer)
+const ROTATE_KID_AFTER_SESSION = true;
 
 const isCandidateValid = (
   trainer: Trainer,
@@ -78,9 +81,16 @@ const isCandidateValid = (
   time: number,
   duration: number,
   trainerHistory: Set<string>,
-  lastLocations: LocationTracker
+  lastLocations: LocationTracker,
+  lastKidForTrainer: Map<string, string>
 ): boolean => {
   const rules = trainer.rules || {};
+
+  // 0. Rotation Constraint: Trainer should not get same kid back-to-back
+  if (ROTATE_KID_AFTER_SESSION) {
+    const lastKid = lastKidForTrainer.get(trainer.id);
+    if (lastKid && lastKid === kid.id) return false;
+  }
 
   // 1. Gender Block
   if (trainer.excludeClientGender && kid.gender) {
@@ -140,6 +150,7 @@ const calculateScore = (
   return score;
 };
 
+// Randomize only among top-scoring ties
 const pickBestWithTieBreak = (candidates: Trainer[], getScore: (t: Trainer) => number) => {
   if (candidates.length === 0) return null;
 
@@ -159,16 +170,34 @@ const pickBestWithTieBreak = (candidates: Trainer[], getScore: (t: Trainer) => n
   return best[Math.floor(Math.random() * best.length)];
 };
 
-// Helper: checks if a trainer is free for full duration (in 15-min slices)
-const isTrainerFreeForDuration = (trainerId: string, day: DayOfWeek, start: number, duration: number, isBooked: any) => {
+// Full-time first wrapper
+const pickFullTimeFirst = (candidates: Trainer[], getScore: (t: Trainer) => number) => {
+  const fullTimers = candidates.filter(isFullTime);
+  const partTimers = candidates.filter((t) => !isFullTime(t));
+
+  return pickBestWithTieBreak(fullTimers.length > 0 ? fullTimers : partTimers, getScore);
+};
+
+const isTrainerFreeForDuration = (
+  trainerId: string,
+  day: DayOfWeek,
+  start: number,
+  duration: number,
+  isBooked: (id: string, day: DayOfWeek, t: number) => boolean
+) => {
   for (let t = start; t < start + duration; t += 15) {
     if (isBooked(trainerId, day, t)) return false;
   }
   return true;
 };
 
-// Helper: checks if kid is free for full duration (in 15-min slices)
-const isKidFreeForDuration = (kidId: string, day: DayOfWeek, start: number, duration: number, isBooked: any) => {
+const isKidFreeForDuration = (
+  kidId: string,
+  day: DayOfWeek,
+  start: number,
+  duration: number,
+  isBooked: (id: string, day: DayOfWeek, t: number) => boolean
+) => {
   for (let t = start; t < start + duration; t += 15) {
     if (isBooked(kidId, day, t)) return false;
   }
@@ -176,7 +205,7 @@ const isKidFreeForDuration = (kidId: string, day: DayOfWeek, start: number, dura
 };
 
 // ============================================================================
-// PART 3: SCHEDULER ENGINE (MIN 1 HR, MAX 2 HRS)
+// PART 3: SCHEDULER ENGINE (Rotation Enabled)
 // ============================================================================
 
 export const generateSchedule = async (
@@ -191,6 +220,7 @@ export const generateSchedule = async (
   const bookedMap = new Set<string>();
   const dailyHistory = new Map<DayOfWeek, Map<string, Set<string>>>();
 
+  // minutes worked per trainer
   const dailyWorkload = new Map<string, number>();
 
   const bookMinute = (trainerId: string, kidId: string, day: DayOfWeek, t: number) => {
@@ -218,8 +248,11 @@ export const generateSchedule = async (
 
     const lastLocations: LocationTracker = new Map();
 
-    // Track kids who got HOME sessions so they won't mix into clinic sessions
+    // prevent mixing home kids into clinic sessions
     const homeKidsScheduled = new Set<string>();
+
+    // 🔥 Track last kid per trainer for rotation
+    const lastKidForTrainer = new Map<string, string>();
 
     const availableStaff = activeTrainers
       .map((t) => {
@@ -235,7 +268,7 @@ export const generateSchedule = async (
       })
       .filter((k) => k !== null) as (Kid & { avail: { start: number; end: number; isHome?: boolean } })[];
 
-    // --- PHASE 1: HOME SESSIONS ---
+    // ---------------- PHASE 1: HOME SESSIONS ----------------
     kidsToday.sort((a, b) => a.avail.start - b.avail.start);
 
     for (const kid of kidsToday) {
@@ -246,11 +279,8 @@ export const generateSchedule = async (
 
       const sessionStart = kid.avail.start;
 
-      let scheduled = false;
-
       for (const duration of DURATION_CHOICES) {
         const sessionEnd = sessionStart + duration;
-
         if (sessionEnd > kid.avail.end) continue;
 
         let candidates = availableStaff.filter(
@@ -269,11 +299,12 @@ export const generateSchedule = async (
             sessionStart,
             duration,
             getTrainerDayHistory(day, staff.id),
-            lastLocations
+            lastLocations,
+            lastKidForTrainer
           )
         );
 
-        const selected = pickBestWithTieBreak(candidates, (t) =>
+        const selected = pickFullTimeFirst(candidates, (t) =>
           calculateScore(t, kid, sessionStart, undefined, dailyWorkload.get(t.id) || 0)
         );
 
@@ -285,6 +316,9 @@ export const generateSchedule = async (
 
         getTrainerDayHistory(day, selected.id).add(kid.id);
         lastLocations.set(selected.id, { time: sessionEnd, location: "HOME" });
+
+        // 🔥 Update rotation tracker
+        lastKidForTrainer.set(selected.id, kid.id);
 
         schedule.push({
           id: crypto.randomUUID(),
@@ -301,25 +335,19 @@ export const generateSchedule = async (
         });
 
         homeKidsScheduled.add(kid.id);
-        scheduled = true;
-        break; // stop trying durations once scheduled
-      }
-
-      if (!scheduled) {
-        // couldn't schedule this home kid
+        break;
       }
     }
 
     if (isWeekend) continue;
 
-    // --- PHASE 2: CLINIC SESSIONS ---
+    // ---------------- PHASE 2: CLINIC SESSIONS ----------------
     const clinicKids = kidsToday.filter((k) => !k.avail.isHome && !homeKidsScheduled.has(k.id));
     const clinicStaff = availableStaff.filter((t) => !t.shift.isHome);
 
     const kidIncumbents = new Map<string, string>();
     const consecutiveMinutes = new Map<string, number>();
 
-    // Step in 1 hour blocks (minimum), but we may schedule 2-hour blocks
     for (let time = 465; time < 1080; time += MIN_SESSION_MINS) {
       const isCircleTime = time >= 540 && time < 600;
 
@@ -337,17 +365,13 @@ export const generateSchedule = async (
         let selectedTrainer: Trainer | null = null;
         let selectedDuration = MIN_SESSION_MINS;
 
-        // Try durations (2h first, then 1h)
         for (const duration of DURATION_CHOICES) {
           const endTime = time + duration;
 
-          // must fit in kid availability
           if (endTime > kid.avail.end) continue;
-
-          // must not exceed kid limit (respect your logic)
           if (currentDuration + duration > limit) continue;
 
-          // 1) Try keep incumbent
+          // 1) Try to keep incumbent (ONLY if rotation allows it)
           if (incumbentId) {
             const incumbent = clinicStaff.find((t) => t.id === incumbentId);
             if (
@@ -355,7 +379,17 @@ export const generateSchedule = async (
               time >= incumbent.shift.start &&
               endTime <= incumbent.shift.end &&
               isTrainerFreeForDuration(incumbent.id, day, time, duration, isBooked) &&
-              isKidFreeForDuration(kid.id, day, time, duration, isBooked)
+              isKidFreeForDuration(kid.id, day, time, duration, isBooked) &&
+              isCandidateValid(
+                incumbent,
+                kid,
+                SessionType.INDIVIDUAL,
+                time,
+                duration,
+                getTrainerDayHistory(day, incumbent.id),
+                lastLocations,
+                lastKidForTrainer
+              )
             ) {
               selectedTrainer = incumbent;
               selectedDuration = duration;
@@ -363,7 +397,7 @@ export const generateSchedule = async (
             }
           }
 
-          // 2) Pick best candidate
+          // 2) Pick best candidate (full-time first)
           let candidates = clinicStaff.filter(
             (t) =>
               time >= t.shift.start &&
@@ -381,11 +415,12 @@ export const generateSchedule = async (
               time,
               duration,
               getTrainerDayHistory(day, t.id),
-              lastLocations
+              lastLocations,
+              lastKidForTrainer
             )
           );
 
-          const picked = pickBestWithTieBreak(candidates, (t) =>
+          const picked = pickFullTimeFirst(candidates, (t) =>
             calculateScore(t, kid, time, incumbentId, dailyWorkload.get(t.id) || 0)
           );
 
@@ -410,6 +445,9 @@ export const generateSchedule = async (
 
           const current = consecutiveMinutes.get(kid.id) || 0;
           consecutiveMinutes.set(kid.id, current + selectedDuration);
+
+          // 🔥 Update rotation tracker
+          lastKidForTrainer.set(selectedTrainer.id, kid.id);
 
           schedule.push({
             id: crypto.randomUUID(),
