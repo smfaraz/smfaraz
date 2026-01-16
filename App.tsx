@@ -9,7 +9,7 @@ import {
   KioskLog
 } from './types';
 
-import { generateSchedule } from './services/geminiService';
+// Removed unused generateSchedule import
 import { apiService } from './services/apiService';
 import { ScheduleView } from './components/ScheduleView';
 
@@ -17,7 +17,6 @@ import {
   SparklesIcon,
   ChartBarIcon,
   SettingsIcon,
-  UserIcon,
   LogOutIcon,
   CalendarIcon,
   UserGroupIcon
@@ -28,7 +27,6 @@ import { AIChat } from './components/AIChat';
 import { DirectorDashboard } from './components/DirectorDashboard';
 import { StaffDashboard } from './components/StaffDashboard';
 import { LandingPage } from './components/LandingPage';
-// FIX: Corrected filename typo from 'kisko' to 'kiosk'
 import { KioskPortal } from './components/kiosk'; 
 
 /* ================================
@@ -52,7 +50,6 @@ const App: React.FC = () => {
   const [showLogin, setShowLogin] = useState(false);
   const [intendedRole, setIntendedRole] = useState('');
 
-  // Track mounted state to avoid memory leaks
   const isMounted = useRef(false);
 
   /* ================================
@@ -70,7 +67,6 @@ const App: React.FC = () => {
         document.documentElement.classList.toggle('dark', isDarkStored);
       }
 
-      // Removed artificial setTimeout for faster load
       try {
         const [t, k, s, l] = await Promise.all([
           apiService.fetchTrainers(),
@@ -103,16 +99,17 @@ const App: React.FC = () => {
   };
 
   /* ================================
-     SYNC ENGINE
+     DATA HANDLERS
   ================================ */
-  const handleSyncSchedule = async () => {
-    setIsGenerating(true);
+  
+  // ✅ REFRESHER: Passed to ScheduleView to reload data after generation
+  const handleRefreshSchedule = async () => {
+    setIsGenerating(true); 
     try {
-      const updatedSchedule = await generateSchedule(trainers, kids, schedule, lockedDays);
-      setSchedule(updatedSchedule);
-      await apiService.saveSchedule(updatedSchedule);
-    } catch (error) {
-      console.error("Sync failed:", error);
+      const updated = await apiService.fetchSchedule();
+      setSchedule(updated);
+    } catch (err) {
+      console.error("Failed to refresh schedule:", err);
     } finally {
       setIsGenerating(false);
     }
@@ -125,9 +122,6 @@ const App: React.FC = () => {
   const handleTrainerStatusUpdate = async (trainerId: string, newStatus: StaffStatus) => {
     const updatedTrainers = await apiService.updateTrainer(trainerId, { status: newStatus });
     setTrainers(updatedTrainers);
-    if (newStatus !== StaffStatus.ACTIVE) {
-      handleSyncSchedule();
-    }
   };
 
   const handleKioskLogAction = async (log: KioskLog) => {
@@ -164,12 +158,10 @@ const App: React.FC = () => {
 
   if (!isReady) return <div className="h-screen flex items-center justify-center">Loading...</div>;
 
-  // --- KIOSK MODE ---
   if (loggedInRole === Role.KIOSK) {
     return <KioskPortal kids={kids} onLogAction={handleKioskLogAction} onExit={() => setLoggedInRole(null)} />;
   }
 
-  // --- LOGIN ---
   if (!loggedInRole) {
     return (
        <div className="transition-colors duration-500">
@@ -192,7 +184,6 @@ const App: React.FC = () => {
     );
   }
 
-  // --- MAIN DASHBOARD ---
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-[#020205] text-zinc-900 dark:text-zinc-100 transition-colors duration-500">
        <nav className="fixed left-0 top-0 h-full w-24 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xl border-r border-zinc-200 dark:border-zinc-800 flex flex-col items-center py-10 z-50">
@@ -216,11 +207,7 @@ const App: React.FC = () => {
               <p className="text-[10px] font-black uppercase tracking-[0.4em] text-brand-600 mb-2">Clinic OS v5.0</p>
               <h2 className="text-6xl font-black tracking-tighter">Welcome, {currentUserObj?.name}</h2>
             </div>
-            {loggedInRole === Role.DIRECTOR && (
-             <button onClick={handleSyncSchedule} disabled={isGenerating} className="bg-black dark:bg-white text-white dark:text-black px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] flex items-center gap-3">
-               <SparklesIcon className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} /> {isGenerating ? 'Syncing...' : 'Run Sync Engine'}
-             </button>
-            )}
+            {/* Quick Sync button removed from here */}
          </header>
 
          <section className="px-12 pb-24">
@@ -237,10 +224,10 @@ const App: React.FC = () => {
                  onToggleLock={handleToggleLock}
                  onUpdateItem={async (id, up) => { const s = await apiService.updateScheduleItem(id, up); setSchedule(s); }} 
                  onDeleteItem={async (id) => { const s = await apiService.deleteScheduleItem(id); setSchedule(s); }}
+                 onRefresh={handleRefreshSchedule} 
               />
             )}
             
-            {/* ADMIN PANEL WITH KIOSK LOGS */}
             {view === 'admin' && loggedInRole === Role.DIRECTOR && (
                <AdminPanel 
                  trainers={trainers} 

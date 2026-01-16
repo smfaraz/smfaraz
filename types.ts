@@ -102,6 +102,7 @@ export interface Kid {
 export interface ScheduleItem {
   id: string;
   day: DayOfWeek;
+  dateStr?: string; // ✅ ADD THIS FIELD
   timeSlot: string;
   trainerId: string;
   trainerName: string;
@@ -111,7 +112,6 @@ export interface ScheduleItem {
   sessionType: SessionType;
   durationMins: number;
   status: SessionStatus;
-  // REMOVED: crew: Crew;
   isLocked?: boolean; 
 }
 
