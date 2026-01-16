@@ -2,7 +2,6 @@ import React, { useState, useMemo } from 'react';
 import { ScheduleItem, DayOfWeek, Trainer, Kid, SessionType } from '../types';
 import { EditIcon, TrashIcon, UserIcon, LockIcon, DocumentUploadIcon, SparklesIcon } from './Icons';
 import { runAutoScheduler, GenerationScope } from '../services/schedulerIntegration';
-// ✅ IMPORT THE NEW EXCEL SERVICE
 import { generateClinicalExcel } from '../services/excelExportService';
 
 interface Props {
@@ -17,7 +16,6 @@ interface Props {
   onRefresh: () => void;
 }
 
-// ✅ STRICT OFFSET MAP
 const DayToOffset: Record<DayOfWeek, number> = {
   [DayOfWeek.MON]: 0,
   [DayOfWeek.TUE]: 1,
@@ -215,17 +213,20 @@ export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoad
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
 
   // --- LOGIC: Calculate Weekly Dates (Fixed Local Time) ---
-  const { mondayDate, weekDates } = useMemo(() => {
+  const { mondayDate, sundayDate, weekDates } = useMemo(() => {
     const today = new Date();
-    // Do NOT setHours here. Use system clock raw.
-
+    
     const currentDay = today.getDay(); // 0=Sun, 1=Mon...
     const diffToMonday = currentDay === 0 ? -6 : 1 - currentDay; 
     
     const monday = new Date(today);
     monday.setDate(today.getDate() + diffToMonday + (currentWeekOffset * 7));
+
+    // Calculate Sunday (for display range)
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
     
-    // Manual Local Format (YYYY-MM-DD)
+    // Generate YYYY-MM-DD map
     const dates: Record<string, string> = {};
     (Object.keys(DayToOffset) as DayOfWeek[]).forEach((day) => {
        const offset = DayToOffset[day];
@@ -239,7 +240,7 @@ export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoad
        dates[day] = `${year}-${month}-${dateVal}`;
     });
 
-    return { mondayDate: monday, weekDates: dates };
+    return { mondayDate: monday, sundayDate: sunday, weekDates: dates };
   }, [currentWeekOffset]);
 
   const filteredItems = useMemo(() => {
@@ -278,10 +279,9 @@ export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoad
       }
   };
 
-  // ✅ EXCEL EXPORT HANDLER
-  const handleExport = async () => {
-    // Note: We don't pass 'schedule' anymore because the service fetches it directly!
-    await generateClinicalExcel(trainers, kids, weekDates);};
+  const handleExport = () => {
+    generateClinicalExcel(schedule, trainers, kids, weekDates);
+  };
 
   if (isLoading) return <div className="h-full flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-brand-500 rounded-full border-t-transparent"/></div>;
 
@@ -294,10 +294,15 @@ export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoad
         {/* Navigation */}
         <div className="flex items-center gap-4 bg-white dark:bg-zinc-900 p-2 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
           <button onClick={() => setCurrentWeekOffset(c => c - 1)} className="p-2 hover:bg-zinc-100 rounded-lg text-xs font-bold">←</button>
-          <div className="text-center min-w-[120px]">
-            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Week Starting</p>
-            <p className="text-sm font-bold dark:text-white">{mondayDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+          
+          {/* 🔥 UPDATED DATE DISPLAY */}
+          <div className="text-center min-w-[150px]">
+            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Week of</p>
+            <p className="text-sm font-bold dark:text-white">
+              {mondayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - {sundayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+            </p>
           </div>
+
           <button onClick={() => setCurrentWeekOffset(c => c + 1)} className="p-2 hover:bg-zinc-100 rounded-lg text-xs font-bold">→</button>
           
           <button onClick={() => setCurrentWeekOffset(0)} className="ml-2 px-3 py-1 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 rounded-lg text-[10px] font-black uppercase tracking-widest">
@@ -335,7 +340,6 @@ export const ScheduleView: React.FC<Props> = ({ schedule, trainers, kids, isLoad
             <select value={trainerFilter} onChange={e => setTrainerFilter(e.target.value)} className="p-2 bg-white border border-zinc-200 rounded-lg text-xs font-bold uppercase"><option value="all">All Staff</option>{trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
             <select value={kidFilter} onChange={e => setKidFilter(e.target.value)} className="p-2 bg-white border border-zinc-200 rounded-lg text-xs font-bold uppercase"><option value="all">All Kids</option>{kids.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}</select>
             
-            {/* ✅ NEW EXPORT BUTTON */}
             <button onClick={handleExport} className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 shadow-lg shadow-emerald-500/20">
               <DocumentUploadIcon className="w-3 h-3"/> Excel Export
             </button>
