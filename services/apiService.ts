@@ -70,30 +70,35 @@ const mapKidToDB = (k: Partial<Kid>) =>
     conflict_history_kids: k.conflictHistoryKids,
   });
 
-// ✅ FIX 1: Map date_str FROM DB
+// ✅ FIX 1: Handle NULL IDs on fetch (prevent UI crashes)
 const mapScheduleFromDB = (s: any): ScheduleItem => ({
   ...s,
   timeSlot: s.time_slot,
-  dateStr: s.date_str, // <--- CRITICAL: Reads date from DB
+  dateStr: s.date_str,
   trainerId: s.trainer_id || "unassigned",
   trainerName: s.trainer_name || "Unassigned",
-  kidId: s.kid_id,
+  // If kid_id is null (Break/Office), use a placeholder string
+  kidId: s.kid_id || "system_placeholder", 
   kidName: s.kid_name,
   sessionType: s.session_type,
   durationMins: s.duration_mins,
   isLocked: s.is_locked,
 });
 
-// ✅ FIX 2: Map date_str TO DB
-const mapScheduleToDB = (s: Partial<ScheduleItem>) =>
-  clean({
+// ✅ FIX 2: Convert "BREAK" / "OFFICE" IDs to NULL before DB Insert
+const mapScheduleToDB = (s: Partial<ScheduleItem>) => {
+  // Check if ID is a fake system ID
+  const isSystemId = (id?: string) => id === "BREAK" || id === "OFFICE" || id === "ADMIN";
+
+  return clean({
     id: s.id,
     day: s.day,
     time_slot: s.timeSlot,
-    date_str: s.dateStr, // <--- CRITICAL: Saves date to DB
+    date_str: s.dateStr,
     trainer_id: s.trainerId === "unassigned" ? null : s.trainerId,
     trainer_name: s.trainerName,
-    kid_id: s.kidId,
+    // 🔥 CRITICAL FIX: Send NULL if it's a Break/Office slot
+    kid_id: isSystemId(s.kidId) ? null : s.kidId,
     kid_name: s.kidName,
     specialty: s.specialty,
     session_type: s.sessionType,
@@ -101,6 +106,7 @@ const mapScheduleToDB = (s: Partial<ScheduleItem>) =>
     status: s.status,
     is_locked: s.isLocked,
   });
+};
 
 const mapLogFromDB = (l: any): KioskLog => ({
   ...l,
@@ -170,7 +176,6 @@ export const apiService = {
     return (data || []).map(mapScheduleFromDB);
   },
   
-  // ✅ NEW: Added for 3-week generator (Previously Missing)
   clearScheduleRange: async (startDate: string, endDate: string): Promise<void> => {
      const { error } = await supabase.from("schedule_items").delete().gte('date_str', startDate).lte('date_str', endDate);
      if (error) console.error("Error clearing range:", error);

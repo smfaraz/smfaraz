@@ -113,6 +113,8 @@ export interface ScheduleItem {
   durationMins: number;
   status: SessionStatus;
   isLocked?: boolean; 
+  isManuallyEdited?: boolean;
+  manualUpdatedAt?: string;
 }
 
 export interface ChatMessage {

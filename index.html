@@ -4,13 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✨</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏥</text></svg>">
     
-    <title>ClinicConnect AI | Monochrome OS</title>
+    <title>ClinicConnect | Enterprise Clinical OS</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
     <script>
       if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
         document.documentElement.classList.add('dark')
@@ -22,92 +24,61 @@
         darkMode: 'class',
         theme: {
           extend: {
-            fontFamily: { sans: ['Outfit', 'sans-serif'] },
+            fontFamily: { sans: ['Inter', 'sans-serif'] },
             colors: {
+              // PROFESSIONAL SLATE/BLUE PALETTE
               brand: {
-                50: '#fafafa', 100: '#f4f4f5', 200: '#e4e4e7', 300: '#d4d4d8',
-                400: '#a1a1aa', 500: '#71717a', 600: '#18181b', 700: '#000000',
-                800: '#000000', 900: '#000000', 950: '#000000',
+                50: '#f8fafc',  // Very light slate
+                100: '#f1f5f9',
+                200: '#e2e8f0',
+                300: '#cbd5e1',
+                400: '#94a3b8',
+                500: '#64748b',
+                600: '#2563eb', // Primary Blue (Action)
+                700: '#1d4ed8', // Darker Blue
+                800: '#1e293b', // Dark Slate
+                900: '#0f172a', // Deepest Slate (Black replacement)
+                950: '#020617',
               },
+            },
+            boxShadow: {
+              'pro': '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
+              'pro-lg': '0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.025)',
             }
           }
         }
       }
     </script>
     <style>
-      :root { --glass-blur: 40px; }
-      body { font-family: 'Outfit', sans-serif; transition: background-color 0.8s ease; overflow-x: hidden; }
+      body { font-family: 'Inter', sans-serif; transition: background-color 0.3s ease; }
       
-      /* MONOCHROME BACKGROUND AURORA */
-      .aurora-bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
-      .blob { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.15; animation: float 20s infinite alternate; }
-      .blob-1 { width: 500px; height: 500px; background: #d4d4d8; top: -10%; left: -10%; }
-      .blob-2 { width: 600px; height: 600px; background: #71717a; bottom: -10%; right: -10%; animation-delay: -5s; }
-      .blob-3 { width: 400px; height: 400px; background: #27272a; top: 40%; right: 20%; animation-delay: -10s; }
-      
-      @keyframes float { 
-        0% { transform: translate(0, 0) scale(1); } 
-        100% { transform: translate(100px, 50px) scale(1.1); } 
+      /* SUBTLE PRO GRADIENT BACKGROUND */
+      .pro-bg {
+        position: fixed; inset: 0; z-index: -1;
+        background: radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.08), transparent 40%),
+                    radial-gradient(circle at 80% 10%, rgba(37, 99, 235, 0.05), transparent 40%),
+                    radial-gradient(circle at 0% 100%, rgba(37, 99, 235, 0.05), transparent 40%);
+      }
+      .dark .pro-bg {
+        background: radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.15), transparent 50%);
       }
 
-      /* STARK MONOCHROME GLASS CLASSES */
+      /* PROFESSIONAL CARD STYLES */
       .glass-panel { 
-        background: rgba(255, 255, 255, 0.8); 
-        backdrop-filter: blur(var(--glass-blur)); 
-        -webkit-backdrop-filter: blur(var(--glass-blur));
-        border: 1px solid #000000;
-        box-shadow: none;
+        background: rgba(255, 255, 255, 0.7); 
+        backdrop-filter: blur(20px); 
+        border: 1px solid rgba(226, 232, 240, 0.8);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
       }
       .dark .glass-panel { 
-        background: rgba(10, 10, 15, 0.85); 
-        border: 1px solid #ffffff;
-        box-shadow : none;
+        background: rgba(15, 23, 42, 0.7); 
+        border: 1px solid rgba(51, 65, 85, 0.5);
       }
 
-      .glass-card {
-        background: rgba(255, 255, 255, 0.9);
-        backdrop-filter: blur(12px);
-        border: 1px solid #000000;
-        transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
-      }
-      .dark .glass-card {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-      }
-
-      /* 3D PERSPECTIVE CARD */
-      .perspective-container { perspective: 1200px; }
-      .tilt-card { 
-        transform-style: preserve-3d; 
-        transition: transform 0.15s ease-out; 
-      }
-
-      /* MONOCHROME NEURAL DONUT LOADER */
-      .neural-ring {
-        width: 80px; height: 80px;
-        border-radius: 50%;
-        border: 10px solid transparent;
-        border-top: 10px solid #000000;
-        border-right: 10px solid #71717a;
-        animation: spin 1s linear infinite;
-        position: relative;
-        filter: grayscale(1);
-      }
-      .dark .neural-ring {
-        border-top: 10px solid #ffffff;
-        border-right: 10px solid #a1a1aa;
-      }
-      .neural-ring::after {
-        content: ''; position: absolute; inset: 4px; border-radius: 50%;
-        border: 6px solid transparent; border-bottom: 6px solid #d4d4d8;
-        animation: spin-reverse 2s linear infinite;
-      }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      @keyframes spin-reverse { to { transform: rotate(-360deg); } }
-
-      ::-webkit-scrollbar { width: 4px; }
-      ::-webkit-scrollbar-thumb { background: #000000; border-radius: 0px; }
-      .dark ::-webkit-scrollbar-thumb { background: #ffffff; }
+      /* SCROLLBAR */
+      ::-webkit-scrollbar { width: 6px; }
+      ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+      .dark ::-webkit-scrollbar-thumb { background: #334155; }
     </style>
   <script type="importmap">
 {
@@ -122,12 +93,8 @@
 </script>
 <link rel="stylesheet" href="/index.css">
 </head>
-  <body class="bg-zinc-50 dark:bg-[#020205] text-zinc-900 dark:text-zinc-100">
-    <div class="aurora-bg">
-      <div class="blob blob-1"></div>
-      <div class="blob blob-2"></div>
-      <div class="blob blob-3"></div>
-    </div>
+  <body class="bg-slate-50 dark:bg-[#0b1120] text-slate-900 dark:text-slate-100">
+    <div class="pro-bg"></div>
     <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
 </body>

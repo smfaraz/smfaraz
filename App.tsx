@@ -9,7 +9,6 @@ import {
   KioskLog
 } from './types';
 
-// Removed unused generateSchedule import
 import { apiService } from './services/apiService';
 import { ScheduleView } from './components/ScheduleView';
 
@@ -102,7 +101,6 @@ const App: React.FC = () => {
      DATA HANDLERS
   ================================ */
   
-  // ✅ REFRESHER: Passed to ScheduleView to reload data after generation
   const handleRefreshSchedule = async () => {
     setIsGenerating(true); 
     try {
@@ -156,7 +154,7 @@ const App: React.FC = () => {
     setAuthError('Unauthorized access attempt.');
   };
 
-  if (!isReady) return <div className="h-screen flex items-center justify-center">Loading...</div>;
+  if (!isReady) return <div className="h-screen flex items-center justify-center text-brand-600 animate-pulse font-semibold">Initializing System...</div>;
 
   if (loggedInRole === Role.KIOSK) {
     return <KioskPortal kids={kids} onLogAction={handleKioskLogAction} onExit={() => setLoggedInRole(null)} />;
@@ -164,18 +162,29 @@ const App: React.FC = () => {
 
   if (!loggedInRole) {
     return (
-       <div className="transition-colors duration-500">
+       <div className="transition-colors duration-500 font-sans">
          <LandingPage onInitiateLogin={(role) => { setIntendedRole(role); setShowLogin(true); }} />
          {showLogin && (
-           <div className="fixed inset-0 z-[1000] backdrop-blur-3xl flex items-center justify-center bg-black/60 p-4">
-             <div className="w-full max-w-lg bg-white p-14 rounded-[3.5rem] relative text-center">
-                 <button onClick={() => setShowLogin(false)} className="absolute top-8 right-8 text-4xl">×</button>
-                 <h1 className="text-4xl font-black mb-10">ClinicConnect</h1>
-                 <form onSubmit={handleLogin} className="space-y-6">
-                    <input placeholder="UID" className="w-full p-6 bg-zinc-100 rounded-3xl outline-none font-bold" value={authForm.user} onChange={e => setAuthForm({...authForm, user: e.target.value})} />
-                    <input type="password" placeholder="TOKEN" className="w-full p-6 bg-zinc-100 rounded-3xl outline-none font-bold" value={authForm.pass} onChange={e => setAuthForm({...authForm, pass: e.target.value})} />
-                    <button className="w-full py-6 bg-black text-white rounded-3xl font-black hover:scale-105 transition-all">Establish Link</button>
-                    <p className="text-xs text-zinc-400 mt-4">Kiosk: kiosk / kiosk</p>
+           <div className="fixed inset-0 z-[1000] backdrop-blur-sm flex items-center justify-center bg-brand-900/40 p-4">
+             <div className="w-full max-w-md bg-white dark:bg-brand-900 border border-brand-100 dark:border-brand-800 p-8 rounded-2xl shadow-2xl relative">
+                 <button onClick={() => setShowLogin(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-xl">×</button>
+                 <div className="flex items-center justify-center gap-2 mb-6">
+                    <SparklesIcon className="w-6 h-6 text-brand-600" />
+                    <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Secure Access</h1>
+                 </div>
+                 
+                 <form onSubmit={handleLogin} className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">User ID</label>
+                        <input className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 transition-all" value={authForm.user} onChange={e => setAuthForm({...authForm, user: e.target.value})} />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Passkey</label>
+                        <input type="password" className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 transition-all" value={authForm.pass} onChange={e => setAuthForm({...authForm, pass: e.target.value})} />
+                    </div>
+                    {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
+                    <button className="w-full py-3 bg-brand-600 text-white rounded-lg font-semibold shadow-lg shadow-brand-500/30 hover:bg-brand-700 transition-all">Verify Credentials</button>
+                    <p className="text-xs text-center text-slate-400 mt-2">Director: admin / admin</p>
                  </form>
              </div>
            </div>
@@ -184,33 +193,50 @@ const App: React.FC = () => {
     );
   }
 
+  // --- PROFESSIONAL SIDEBAR & LAYOUT ---
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-[#020205] text-zinc-900 dark:text-zinc-100 transition-colors duration-500">
-       <nav className="fixed left-0 top-0 h-full w-24 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xl border-r border-zinc-200 dark:border-zinc-800 flex flex-col items-center py-10 z-50">
-          <div className="w-12 h-12 bg-black dark:bg-white rounded-2xl flex items-center justify-center shadow-xl mb-12">
-            <SparklesIcon className="w-6 h-6 text-white dark:text-black" />
+    <div className="min-h-screen bg-slate-50 dark:bg-[#0b1120] text-slate-900 dark:text-slate-100 transition-colors duration-500 font-sans">
+       
+       {/* Sidebar */}
+       <nav className="fixed left-0 top-0 h-full w-20 bg-brand-900 dark:bg-brand-950 flex flex-col items-center py-6 z-50 shadow-2xl">
+          <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center shadow-lg shadow-brand-500/40 mb-10">
+            <SparklesIcon className="w-5 h-5 text-white" />
           </div>
-          <div className="flex-1 flex flex-col gap-8">
-            <button onClick={() => setView('dashboard')} className={`p-4 rounded-2xl transition-all ${view === 'dashboard' ? 'bg-black text-white shadow-xl' : 'hover:bg-zinc-100'}`}><ChartBarIcon className="w-6 h-6"/></button>
-            <button onClick={() => setView('schedule')} className={`p-4 rounded-2xl transition-all ${view === 'schedule' ? 'bg-black text-white shadow-xl' : 'hover:bg-zinc-100'}`}><CalendarIcon className="w-6 h-6"/></button>
-            {loggedInRole === Role.DIRECTOR && <button onClick={() => setView('admin')} className={`p-4 rounded-2xl transition-all ${view === 'admin' ? 'bg-black text-white shadow-xl' : 'hover:bg-zinc-100'}`}><UserGroupIcon className="w-6 h-6"/></button>}
+          
+          <div className="flex-1 flex flex-col gap-6 w-full px-3">
+            <button onClick={() => setView('dashboard')} 
+                className={`p-3 rounded-xl transition-all w-full flex justify-center ${view === 'dashboard' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`} title="Dashboard">
+                <ChartBarIcon className="w-6 h-6"/>
+            </button>
+            <button onClick={() => setView('schedule')} 
+                className={`p-3 rounded-xl transition-all w-full flex justify-center ${view === 'schedule' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`} title="Schedule">
+                <CalendarIcon className="w-6 h-6"/>
+            </button>
+            {loggedInRole === Role.DIRECTOR && 
+            <button onClick={() => setView('admin')} 
+                className={`p-3 rounded-xl transition-all w-full flex justify-center ${view === 'admin' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`} title="Admin">
+                <UserGroupIcon className="w-6 h-6"/>
+            </button>}
           </div>
-          <div className="flex flex-col gap-4">
-            <button onClick={toggleTheme} className="p-4 hover:bg-zinc-100 rounded-2xl"><SettingsIcon className="w-6 h-6" /></button>
-            <button onClick={() => setLoggedInRole(null)} className="p-4 text-rose-500 hover:bg-rose-50 rounded-2xl"><LogOutIcon className="w-6 h-6" /></button>
+
+          <div className="flex flex-col gap-4 px-3 w-full">
+            <button onClick={toggleTheme} className="p-3 text-slate-400 hover:text-white hover:bg-white/5 rounded-xl w-full flex justify-center"><SettingsIcon className="w-6 h-6" /></button>
+            <button onClick={() => setLoggedInRole(null)} className="p-3 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl w-full flex justify-center"><LogOutIcon className="w-6 h-6" /></button>
           </div>
        </nav>
 
-       <main className="pl-24">
-         <header className="px-12 py-12 flex justify-between items-center">
+       <main className="pl-20">
+         <header className="px-10 py-8 flex justify-between items-center border-b border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-brand-950/50 backdrop-blur-sm sticky top-0 z-40">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.4em] text-brand-600 mb-2">Clinic OS v5.0</p>
-              <h2 className="text-6xl font-black tracking-tighter">Welcome, {currentUserObj?.name}</h2>
+              <div className="flex items-center gap-2 mb-1">
+                 <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                 <p className="text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">Clinic OS v5.0</p>
+              </div>
+              <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight">Welcome, {currentUserObj?.name}</h2>
             </div>
-            {/* Quick Sync button removed from here */}
          </header>
 
-         <section className="px-12 pb-24">
+         <section className="p-10">
             {view === 'dashboard' && loggedInRole === Role.DIRECTOR && <DirectorDashboard trainers={trainers} kids={kids} schedule={schedule} />}
             {view === 'dashboard' && loggedInRole === Role.STAFF && currentUserObj && <StaffDashboard trainer={currentUserObj as Trainer} schedule={filteredSchedule} onUpdateStatus={(s) => handleTrainerStatusUpdate(currentUserObj.id, s)} />}
             

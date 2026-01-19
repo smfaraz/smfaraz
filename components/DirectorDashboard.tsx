@@ -1,6 +1,6 @@
 import React from 'react';
 import { Trainer, Kid, ScheduleItem, StaffStatus, SessionType } from '../types';
-import { ChartBarIcon, UserGroupIcon, UserIcon, CalendarIcon, SparklesIcon, CheckIcon } from './Icons';
+import { UserGroupIcon, UserIcon, CalendarIcon, CheckIcon } from './Icons';
 
 interface Props {
   trainers: Trainer[];
@@ -10,9 +10,8 @@ interface Props {
 
 export const DirectorDashboard: React.FC<Props> = ({ trainers, kids, schedule }) => {
   const activeStaff = trainers.filter(t => t.status === StaffStatus.ACTIVE).length;
-  const availableTechs = trainers.length - activeStaff; // Or advanced logic checking current time availability
+  const availableTechs = trainers.length - activeStaff; 
   
-  // Kids scheduled Today (Assume today is Monday for demo, or real date match)
   const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
   const kidsToday = new Set(schedule.filter(s => s.day === todayDay).map(s => s.kidId)).size;
 
@@ -21,43 +20,55 @@ export const DirectorDashboard: React.FC<Props> = ({ trainers, kids, schedule })
   const compliancePercent = targetSocialCount > 0 ? Math.min(100, (socialBlockCount / targetSocialCount) * 100) : 100;
 
   const stats = [
-    { label: 'Staff Active', val: `${activeStaff}/${trainers.length}`, sub: 'Role: Active', icon: UserGroupIcon },
-    { label: 'Techs Available', val: availableTechs, sub: 'Standby / OFF', icon: UserIcon },
-    { label: 'Kids Scheduled', val: kidsToday, sub: 'Today\'s Roster', icon: CalendarIcon },
-    { label: 'Compliance', val: `${compliancePercent.toFixed(0)}%`, sub: 'Social Hours', icon: CheckIcon },
+    { label: 'Active Staff', val: `${activeStaff}/${trainers.length}`, sub: 'Currently clocked in', icon: UserGroupIcon, color: 'text-blue-600', bg: 'bg-blue-50 dark:bg-blue-900/20' },
+    { label: 'Standby Techs', val: availableTechs, sub: 'Available for cover', icon: UserIcon, color: 'text-slate-600', bg: 'bg-slate-100 dark:bg-slate-800' },
+    { label: 'Daily Roster', val: kidsToday, sub: 'Students scheduled today', icon: CalendarIcon, color: 'text-emerald-600', bg: 'bg-emerald-50 dark:bg-emerald-900/20' },
+    { label: 'Social Compliance', val: `${compliancePercent.toFixed(0)}%`, sub: 'Target hours met', icon: CheckIcon, color: 'text-indigo-600', bg: 'bg-indigo-50 dark:bg-indigo-900/20' },
   ];
 
   return (
-    <div className="space-y-8 lg:space-y-12 animate-in fade-in slide-in-from-bottom-6 duration-700">
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      
+      {/* KPI CARDS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {stats.map((s, i) => (
-          <div key={i} className="glass-panel p-8 lg:p-10 rounded-[2.5rem] group hover:scale-[1.03] transition-all hover:border-brand-500/30">
-            <div className="flex justify-between items-start mb-8">
-               <div className="p-4 bg-brand-600/10 dark:bg-brand-600/20 text-brand-600 rounded-2xl group-hover:bg-brand-600 group-hover:text-white transition-all shadow-xl shadow-brand-500/5">
-                 <s.icon className="w-6 h-6" />
+          <div key={i} className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex justify-between items-start mb-4">
+               <div className={`p-3 rounded-lg ${s.bg} ${s.color}`}>
+                 <s.icon className="w-5 h-5" />
                </div>
-               <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{s.label}</span>
+               {i === 3 && parseInt(s.val) < 80 && <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded">Attention</span>}
             </div>
-            <h4 className="text-4xl font-black tracking-tighter dark:text-white mb-2">{s.val}</h4>
-            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{s.sub}</p>
+            <div>
+              <h4 className="text-3xl font-bold text-slate-900 dark:text-white tracking-tight">{s.val}</h4>
+              <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mt-1">{s.label}</p>
+              <p className="text-xs text-slate-400 mt-2">{s.sub}</p>
+            </div>
           </div>
         ))}
       </div>
       
-      {/* Existing Compliance Monitor Code... (Preserved) */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 items-start">
-        <div className="xl:col-span-2 glass-panel rounded-[3.5rem] overflow-hidden border-zinc-200 dark:border-zinc-800">
-             <div className="p-8"><h3 className="font-black text-xl uppercase dark:text-white">Compliance Monitor</h3></div>
-             <div className="p-8 pt-0 space-y-4">
-                 {/* Logic preserved from previous render */}
+      {/* COMPLIANCE TABLE */}
+      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+         <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+           <h3 className="font-semibold text-slate-900 dark:text-white">Compliance Monitor</h3>
+         </div>
+         <div className="p-6">
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                  {kids.map(k => (
-                     <div key={k.id} className="flex justify-between items-center p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
-                        <span className="font-bold text-sm">{k.name}</span>
-                        <span className="text-xs text-zinc-400">{k.crew}</span>
+                     <div key={k.id} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-700">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-600">
+                            {k.name.substring(0,2)}
+                          </div>
+                          <span className="font-medium text-sm text-slate-700 dark:text-slate-200">{k.name}</span>
+                        </div>
+                        {/* Example status indicator */}
+                        <div className="h-2 w-2 rounded-full bg-emerald-500"></div>
                      </div>
                  ))}
              </div>
-        </div>
+         </div>
       </div>
     </div>
   );

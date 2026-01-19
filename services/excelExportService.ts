@@ -2,15 +2,30 @@ import { utils, write } from 'xlsx-js-style';
 import { supabase } from '../lib/supabaseClient';
 import { Trainer, Kid, DayOfWeek } from '../types';
 
-// --- COLORS ---
-const CLIENT_COLORS: Record<string, string> = {
-  "NK": "FF99CC", "MA": "99CCFF", "TH": "FFFF99", "HH": "CC99FF",
-  "YH": "FFCC99", "JoDa": "CCFFCC", "JaDa": "FFFFCC", "JuG": "FFCCCC",
-  "DD": "E0E0E0", "BREAK": "D9D9D9", "OFFICE WORK": "FFFFFF",
+// --- CONFIGURATION: YOUR NEW COLORS ---
+const COLORS: Record<string, string> = {
+  NK: "00FFFF",
+  MA: "9000FF",
+  TH: "44BBC4",
+  HH: "FF0000",
+  YH: "FFFF00",
+  JoDa: "4385EC",
+  JaDa: "45821C",
+  JuG: "00FF00",
+  AF: "EEA2A2",
+  AC: "FFA500",
+  EM: "99C67C",
+
+  DD: "E0E0E0",
+  BREAK: "D9D9D9",
+  OFFICE: "FFFFFF",
+  HEADER_GREY: "D9D9D9",
+  DATE_YELLOW: "FFFF00",
+  TEXT_RED: "FF0000"
 };
+
 const DEFAULT_COLOR = "FFFFFF";
 
-// --- ROWS DEFINITION ---
 const TIME_SLOTS = [
   { label: "", start: "8:00", end: "9:00" },
   { label: "", start: "9:00", end: "10:00" },
@@ -26,96 +41,113 @@ const TIME_SLOTS = [
   { label: "CLEAN UP", start: "4:00", end: "4:15" }
 ];
 
-// --- LOGIC: HOUR MATCHING ---
+// --- HELPERS ---
 
-// Convert "08:45 AM" -> 8 (integer hour 0-23)
-const getHour = (timeStr: string): number => {
-  if (!timeStr) return -1;
-  // Regex to capture Hour, Minute, AM/PM
-  const match = timeStr.toLowerCase().match(/(\d+):(\d+)\s*(am|pm)?/);
-  if (!match) return -1;
-
-  let h = parseInt(match[1]);
-  const amp = match[3];
-
-  // 12PM is 12, 1PM is 13, 8AM is 8
-  if (amp === 'pm' && h !== 12) h += 12;
-  if (amp === 'am' && h === 12) h = 0;
-
-  return h;
-};
-
-// Convert "08:45 AM" -> Minutes (for calculating end time text)
+// Returns minutes from midnight (e.g. 8:30 AM -> 510)
 const getMins = (timeStr: string): number => {
   if (!timeStr) return 0;
+
   const match = timeStr.toLowerCase().match(/(\d+):(\d+)\s*(am|pm)?/);
   if (!match) return 0;
+
   let h = parseInt(match[1]);
   let m = parseInt(match[2]);
-  const amp = match[3];
-  if (amp === 'pm' && h !== 12) h += 12;
-  if (amp === 'am' && h === 12) h = 0;
+
+  if (match[3] === 'pm' && h !== 12) h += 12;
+  if (match[3] === 'am' && h === 12) h = 0;
+
   return h * 60 + m;
 };
 
-// Create Text: "NK 8:45 - 10:45"
-const formatSessionText = (name: string, startStr: string, duration: number) => {
-  const startMins = getMins(startStr);
-  const endMins = startMins + duration;
-  
-  // Format End Time
-  let endH = Math.floor(endMins / 60);
-  const endM = endMins % 60;
-  const endP = endH >= 12 ? 'PM' : 'AM';
-  if (endH > 12) endH -= 12;
-  if (endH === 0) endH = 12;
-  
-  const endStr = `${endH}:${endM.toString().padStart(2,'0')} ${endP}`;
-  const cleanStart = startStr.replace(/^0/, ''); // Remove leading zero
-  
-  return `${name} ${cleanStart} - ${endStr}`;
+const formatTimeFromMins = (mins: number) => {
+  let h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const period = h >= 12 ? 'PM' : 'AM';
+  if (h > 12) h -= 12;
+  if (h === 0) h = 12;
+  return `${h}:${m.toString().padStart(2, '0')} ${period}`;
 };
 
-// --- STYLING HELPERS ---
+// ALWAYS extract start time from range safely
+const getStartOnly = (timeSlot: string) => {
+  if (!timeSlot) return "";
+  if (timeSlot.includes(" - ")) return timeSlot.split(" - ")[0].trim();
+  return timeSlot.trim();
+};
+
+// Odd timing = not exactly on hour
+const isOddStartTime = (startTimeStr: string) => {
+  const mins = getMins(startTimeStr);
+  return mins % 60 !== 0;
+};
+
+const formatSessionText = (name: string, startOnly: string, duration: number, showTime: boolean) => {
+  if (!name) return "";
+  if (!showTime) return name;
+
+  const startMins = getMins(startOnly);
+  const endMins = startMins + duration;
+
+  const startDisplay = formatTimeFromMins(startMins);
+  const endDisplay = formatTimeFromMins(endMins);
+
+  return `${name} ${startDisplay} - ${endDisplay}`;
+};
+
 const getCellColor = (text: string) => {
   if (!text) return DEFAULT_COLOR;
   const upper = text.toUpperCase();
-  for (const [key, color] of Object.entries(CLIENT_COLORS)) {
-    if (upper.includes(key)) return color;
+
+  for (const [key, color] of Object.entries(COLORS)) {
+    if (upper.includes(key.toUpperCase())) return color;
   }
-  if (upper.includes("BREAK")) return CLIENT_COLORS["BREAK"];
-  if (upper.includes("OFFICE")) return CLIENT_COLORS["OFFICE WORK"];
+  if (upper.includes("OFFICE")) return COLORS.OFFICE;
+
   return DEFAULT_COLOR;
 };
 
-const createCell = (value: string, styles: any = {}) => ({
-  v: value, t: 's', 
-  s: { 
-    font: { name: "Calibri", sz: 11, ...styles.font }, 
-    alignment: { vertical: "center", horizontal: "center", wrapText: true, ...styles.alignment }, 
-    border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, 
-    fill: styles.fill || { fgColor: { rgb: "FFFFFF" } }, 
-    ...styles 
+const cell = (v: string, opts: any = {}) => ({
+  v,
+  t: 's',
+  s: {
+    font: { name: "Calibri", sz: 11, ...(opts.font || {}) },
+    alignment: { vertical: "center", horizontal: "center", wrapText: true, ...(opts.align || {}) },
+    border: {
+      top: { style: "thin" },
+      bottom: { style: "thin" },
+      left: { style: "thin" },
+      right: { style: "thin" }
+    },
+    fill: { fgColor: { rgb: (opts.bg || "FFFFFF") } }
   }
 });
+
 const empty = () => ({ v: "", t: "s", s: {} });
 
-// --- MAIN EXPORT ---
+// --- MAIN EXPORT FUNCTION ---
 export const generateClinicalExcel = async (
-  trainers: Trainer[], 
-  kids: Kid[], 
+  _schedule: any[],
+  trainers: Trainer[],
+  kids: Kid[],
   weekDates: Record<string, string>
 ) => {
-  // 1. Fetch Data Directly (Safe & Sure)
+  console.log("📊 Exporting with New Colors...", weekDates);
+
   const dates = Object.values(weekDates).sort();
+  if (dates.length === 0) {
+    alert("No dates found to export.");
+    return;
+  }
+
   const { data: rawSchedule, error } = await supabase
     .from('schedule_items')
     .select('*')
     .gte('date_str', dates[0])
-    .lte('date_str', dates[dates.length-1]);
+    .lte('date_str', dates[dates.length - 1]);
 
-  if (error || !rawSchedule) {
-    alert("Database Error: Could not export.");
+  if (error) {
+    console.error("Supabase Export Error:", error);
+    alert("Error fetching schedule data.");
     return;
   }
 
@@ -127,88 +159,106 @@ export const generateClinicalExcel = async (
     const dateStr = weekDates[day];
     const wsData: any[][] = [];
 
-    // --- HEADERS (Matching Legacy File) ---
-    wsData.push([empty(), createCell("Sessions max 120 mins...", { font: { italic: true, color: { rgb: "FF0000" } }, alignment: { horizontal: "left" } })]);
-    wsData.push([empty(), createCell("Min 3 sessions per day...", { font: { italic: true }, alignment: { horizontal: "left" } })]);
-    wsData.push([]); 
+    // --- HEADER ROWS ---
+    wsData.push([empty(), cell("Sessions can only be up to a max of 120 mins long...", { font: { italic: true, color: { rgb: COLORS.TEXT_RED } }, align: { horizontal: "left" } })]);
+    wsData.push([empty(), cell("There must be a minimum of three 90 min sessions per day...", { font: { italic: true }, align: { horizontal: "left" } })]);
+    wsData.push([empty(), cell("Each child should be given minimum 2 hours of group time...", { font: { italic: true }, align: { horizontal: "left" } })]);
+    wsData.push([empty(), cell("Everyone within a crew must transition at the same time...", { font: { italic: true }, align: { horizontal: "left" } })]);
+    wsData.push([]);
 
-    // Client Summary
-    wsData.push([empty(), empty(), createCell("Client", { font: { bold: true }, fill: { fgColor: { rgb: "D9D9D9" } } }), ...kids.map(k => createCell(k.name, { font: { bold: true } }))]);
-    wsData.push([]); 
+    const clientHeader = [empty(), empty(), cell("Client", { font: { bold: true }, bg: COLORS.HEADER_GREY })];
+    kids.forEach(k => clientHeader.push(cell(k.name, { font: { bold: true } })));
+    wsData.push(clientHeader);
 
-    // Staff Header
-    wsData.push([empty(), createCell("NOTES", { font: { bold: true } }), createCell("DATE", { font: { bold: true }, fill: { fgColor: { rgb: "FFFF00" } } }), ...activeTrainers.map(t => createCell(t.name, { font: { bold: true }, fill: { fgColor: { rgb: "D9D9D9" } } }))]);
+    const scheduleRow = [empty(), empty(), cell("Schedule", { font: { bold: true } })];
+    kids.forEach(() => scheduleRow.push(cell("In-home")));
+    wsData.push(scheduleRow);
 
-    // Date Header
-    wsData.push([empty(), createCell("All clients have middles together"), createCell(dateStr, { fill: { fgColor: { rgb: "FFFF00" } } }), ...activeTrainers.map(t => createCell(t.shifts?.[day] || "8:00 - 4:00"))]);
+    const insuranceRow = [empty(), empty(), cell("Insurance", { font: { bold: true } })];
+    kids.forEach(() => insuranceRow.push(cell("BCBS")));
+    wsData.push(insuranceRow);
+
+    const superRow = [empty(), empty(), cell("Supervision Hours", { font: { bold: true } })];
+    kids.forEach(() => superRow.push(cell("8 (32 units)")));
+    wsData.push(superRow);
+    wsData.push([]);
+
+    // --- STAFF HEADER ---
+    const staffRow = [
+      empty(),
+      cell("NOTES", { font: { bold: true } }),
+      cell("DATE", { font: { bold: true }, bg: COLORS.DATE_YELLOW }),
+      ...activeTrainers.map(t => cell(t.name, { font: { bold: true }, bg: COLORS.HEADER_GREY }))
+    ];
+    wsData.push(staffRow);
+
+    const dateRow = [
+      empty(),
+      cell("All clients have middles together"),
+      cell(dateStr, { bg: COLORS.DATE_YELLOW }),
+      ...activeTrainers.map(t => cell(t.shifts?.[day] || "8:00 - 4:00"))
+    ];
+    wsData.push(dateRow);
 
     // --- GRID ---
     TIME_SLOTS.forEach(slot => {
-      const rowCells = [empty()];
-      rowCells.push(createCell(slot.label, { font: { bold: true } }));
-      rowCells.push(createCell(`${slot.start}-${slot.end}`, { font: { bold: true } }));
+      const row: any[] = [empty()];
+      row.push(cell(slot.label, { font: { bold: true } }));
+      row.push(cell(`${slot.start}-${slot.end}`, { font: { bold: true } }));
 
-      // LOGIC: MATCH THE HOUR
-      // "8:00" -> Hour 8
-      // "11:30" -> Hour 11 (Wait, for 11:30 slot, we want 11:xx times to match here too?)
-      // Actually, for split hours (11:00 and 11:30), simple hour matching puts EVERYTHING in 11:00.
-      // So we use a smart check: 
-      // If the slot starts at :30, we check if the session minute is >= 30.
-      
-      const slotH = getHour(slot.start);
-      const slotM = parseInt(slot.start.split(':')[1]); // 0 or 30
+      const slotStartMins = getMins(slot.start);
+      const slotEndMins = getMins(slot.end);
 
       activeTrainers.forEach(staff => {
-        // Find Item
-        const item = rawSchedule.find((s: any) => {
-          if (s.date_str !== dateStr) return false;
-          if (s.trainer_id !== staff.id) return false;
+        const item = rawSchedule?.find((s: any) => {
+          if (s.date_str !== dateStr || s.trainer_id !== staff.id) return false;
 
-          const sessionH = getHour(s.time_slot);
-          const sessionM = parseInt(s.time_slot.split(':')[1]);
+          const startOnly = getStartOnly(s.time_slot || "");
+          const sessionStart = getMins(startOnly);
+          const sessionEnd = sessionStart + (s.duration_mins || 60);
 
-          // PRIMARY LOGIC: Match the Hour
-          if (sessionH !== slotH) return false;
-
-          // SECONDARY LOGIC: Handle 11:00 vs 11:30 rows
-          // If slot starts at 00, take sessions 00-29
-          // If slot starts at 30, take sessions 30-59
-          if (slotM === 30) return sessionM >= 30;
-          if (slotM === 0) {
-             // Does this hour have a :30 slot later? (11, 12, 1 do)
-             const hasHalf = ["11", "12", "1", "01"].includes(slotH.toString()) || slotH === 11 || slotH === 12 || slotH === 13 || slotH === 1;
-             if (hasHalf) return sessionM < 30; // Only take first half
-             return true; // Take whole hour (8, 9, 10...)
-          }
-          return true;
+          return (sessionStart < slotEndMins) && (sessionEnd > slotStartMins);
         });
 
-        let val = "";
-        let color = DEFAULT_COLOR;
-
         if (item) {
-          const type = item.session_type;
-          const name = item.kid_name || "";
-          
-          if (type === 'Break') val = "BREAK";
-          else if (type === 'Office') val = "OFFICE WORK";
-          else if (type === 'Social') val = "SOCIAL";
+          const type = String(item.session_type || "").toLowerCase();
+          let text = "";
+
+          if (type === "break") text = "BREAK";
+          else if (type === "office") text = "OFFICE WORK";
+          else if (type === "social") text = "SOCIAL";
           else {
-             // "NK 8:45 - 10:45"
-             val = formatSessionText(name, item.time_slot, item.duration_mins);
+            const startOnly = getStartOnly(item.time_slot || "");
+            const showTime = isOddStartTime(startOnly);
+
+            text = formatSessionText(
+              item.kid_name || "",
+              startOnly,
+              item.duration_mins || 60,
+              showTime
+            );
           }
-          color = getCellColor(val);
+
+          row.push(cell(text, { bg: getCellColor(text) }));
+        } else {
+          row.push(cell(""));
         }
-        rowCells.push(createCell(val, { fill: { fgColor: { rgb: color } } }));
       });
-      wsData.push(rowCells);
+
+      wsData.push(row);
     });
 
     const ws = utils.aoa_to_sheet([]);
-    wsData.forEach((row, r) => row.forEach((cell, c) => ws[utils.encode_cell({ r, c })] = cell));
-    ws['!ref'] = utils.encode_range({ s: {r:0, c:0}, e: {r:wsData.length, c:wsData[5]?.length || 20} });
-    ws['!cols'] = [{ wch: 2 }, { wch: 15 }, { wch: 15 }, ...activeTrainers.map(() => ({ wch: 24 }))];
-    utils.book_append_sheet(wb, ws, day);
+    wsData.forEach((row, r) => {
+      row.forEach((c, colIndex) => {
+        const ref = utils.encode_cell({ r, c: colIndex });
+        ws[ref] = c;
+      });
+    });
+
+    ws['!ref'] = utils.encode_range({ s: { r: 0, c: 0 }, e: { r: wsData.length, c: 20 } });
+    ws['!cols'] = [{ wch: 2 }, { wch: 20 }, { wch: 18 }, ...activeTrainers.map(() => ({ wch: 24 }))];
+    utils.book_append_sheet(wb, ws, String(day));
   });
 
   const fileName = `Clinical_Scheduler_${dates[0]}.xlsx`;
