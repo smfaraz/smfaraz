@@ -56,7 +56,9 @@ const LogicTerminal = () => {
     "> Analyzing Student-to-Staff ratios...",
     "> Validation: 97155 supervision goal met.",
     "> Resolving Travel Buffer: 30min gap inserted.",
-    "> Optimization Complete: 100% Coverage reached."
+    "> Optimization Complete: 100% Coverage reached.",
+    "> Deploying updated schedules to portals...",
+    "> Monitoring for real-time changes...",
   ];
 
   useEffect(() => {
@@ -88,12 +90,10 @@ const LogicTerminal = () => {
 
 export const LandingPage: React.FC<Props> = ({ onInitiateLogin }) => {
   const { scrollYProgress } = useScroll();
-  const scaleX = useSpring(scrollYProgress, { stiffness: 100, damping: 30 });
   const backgroundY = useTransform(scrollYProgress, [0, 1], ['0%', '20%']);
 
   return (
     <div className="min-h-screen selection:bg-brand-500/30 font-sans bg-white dark:bg-[#0b1120] overflow-x-hidden">
-      <motion.div className="fixed top-0 left-0 right-0 h-1.5 bg-brand-600 origin-left z-[1000] shadow-[0_0_10px_rgba(79,70,229,0.8)]" style={{ scaleX }} />
 
       {/* --- HERO SECTION --- */}
       <section className="relative min-h-screen flex flex-col items-center justify-center px-6 overflow-hidden">
