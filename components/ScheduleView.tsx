@@ -147,7 +147,7 @@ const CompactSessionCard: React.FC<{
         }`}
       >
         <span className="text-[10px] font-black tracking-widest text-slate-400 uppercase">BREAK</span>
-        <span className="text-[9px] font-bold text-slate-300 mt-1">{item.timeSlot.split(' - ')[0]}</span>
+        <span className="text-[9px] font-bold text-slate-300 mt-1">{item.timeSlot}</span>
       </div>
     );
   }
@@ -165,7 +165,7 @@ const CompactSessionCard: React.FC<{
     >
       <div className="flex justify-between items-start">
         <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{item.kidName}</span>
-        <span className="text-[9px] font-bold text-slate-400">{item.timeSlot.split(' - ')[0]}</span>
+        <span className="text-[9px] font-bold text-slate-400">{item.timeSlot}</span>
       </div>
       <div className="flex justify-between items-center mt-1">
         <span className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[80px]">{item.trainerName}</span>
@@ -192,7 +192,10 @@ export const ScheduleView: React.FC<Props> = ({
 
   const [editingItem, setEditingItem] = useState<ScheduleItem | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+
+  // WEEK FILTERS
   const [trainerFilter, setTrainerFilter] = useState('all');
+  const [kidFilter, setKidFilter] = useState('all');
 
   // --- WEEK DATES (LOCAL SAFE) ---
   const { weekDates, mondayDate } = useMemo(() => {
@@ -242,8 +245,12 @@ export const ScheduleView: React.FC<Props> = ({
   const isDayLocked = lockedDays.includes(dayName);
 
   const filteredWeekItems = useMemo(() => {
-    return schedule.filter((s) => trainerFilter === 'all' || s.trainerId === trainerFilter);
-  }, [schedule, trainerFilter]);
+    return schedule.filter((s) => {
+      const trainerOk = trainerFilter === 'all' || s.trainerId === trainerFilter;
+      const kidOk = kidFilter === 'all' || s.kidId === kidFilter;
+      return trainerOk && kidOk;
+    });
+  }, [schedule, trainerFilter, kidFilter]);
 
   // --- NAV HANDLERS ---
   const goPrev = () => {
@@ -373,18 +380,33 @@ export const ScheduleView: React.FC<Props> = ({
         {/* RIGHT */}
         <div className="flex gap-3">
           {viewMode === 'WEEK' && (
-            <select
-              value={trainerFilter}
-              onChange={(e) => setTrainerFilter(e.target.value)}
-              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 text-xs font-bold rounded-lg px-3 outline-none"
-            >
-              <option value="all">All Staff</option>
-              {trainers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+            <>
+              <select
+                value={trainerFilter}
+                onChange={(e) => setTrainerFilter(e.target.value)}
+                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 text-xs font-bold rounded-lg px-3 outline-none"
+              >
+                <option value="all">All Staff</option>
+                {trainers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={kidFilter}
+                onChange={(e) => setKidFilter(e.target.value)}
+                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 text-xs font-bold rounded-lg px-3 outline-none"
+              >
+                <option value="all">All Kids</option>
+                {kids.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name}
+                  </option>
+                ))}
+              </select>
+            </>
           )}
 
           <button
@@ -536,9 +558,11 @@ export const ScheduleView: React.FC<Props> = ({
                       <div>
                         <p className={`text-[10px] font-black uppercase tracking-widest ${isToday ? 'text-brand-600' : 'text-slate-500'}`}>{day}</p>
                         <p className={`text-xs font-bold ${isToday ? 'text-brand-700 dark:text-brand-400' : 'text-slate-400'}`}>
-                          {new Date(dateStr + 'T00:00:00').getDate()}
+                          {new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           {past ? ' (Past)' : ''}
                         </p>
+
+
                       </div>
 
                       {!past && (
@@ -954,54 +978,93 @@ export const ScheduleView: React.FC<Props> = ({
                   </div>
 
                   {/* Actions */}
-                  <div className="pt-2 flex flex-col gap-2">
-                    <button
-                      onClick={async () => {
-                        const safeDuration = clampDurationByType(editingItem.durationMins);
-                        const start = getStartOnly(editingItem.timeSlot);
-                        const nextSlot = buildTimeSlot(start, safeDuration);
+                  {/* Actions */}
+<div className="pt-2 flex flex-col gap-2">
+  {/* SAVE ONLY (NO AUTOSCHEDULER EVER) */}
+  <button
+    onClick={async () => {
+      const safeDuration = clampDurationByType(editingItem.durationMins);
+      const start = getStartOnly(editingItem.timeSlot);
+      const nextSlot = buildTimeSlot(start, safeDuration);
 
-                        const updatedItem = {
-                          ...editingItem,
-                          durationMins: safeDuration,
-                          timeSlot: nextSlot,
-                          isManuallyEdited: true,
-                          isLocked: true
-                        };
+      const updatedItem = {
+        ...editingItem,
+        durationMins: safeDuration,
+        timeSlot: nextSlot,
+        isManuallyEdited: true,
+        isLocked: true
+      };
 
-                        await onUpdateItem(editingItem.id, updatedItem);
-                        setEditingItem(null);
+      await onUpdateItem(editingItem.id, updatedItem);
+      setEditingItem(null);
+      onRefresh();
+    }}
+    className="w-full py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-white font-black rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+  >
+    Save Only
+  </button>
 
-                        if (updatedItem.dateStr) {
-                          const targetDate = new Date(updatedItem.dateStr + 'T00:00:00');
-                          await runAutoScheduler('DAY', targetDate);
-                          onRefresh();
-                        }
-                      }}
-                      className="w-full py-3 bg-brand-600 hover:bg-brand-700 text-white font-black rounded-xl shadow-lg transition-all"
-                    >
-                      Save & Rebalance
-                    </button>
+  {/* SAVE & REBALANCE (ONLY FOR TODAY/FUTURE) */}
+  <button
+    onClick={async () => {
+      const safeDuration = clampDurationByType(editingItem.durationMins);
+      const start = getStartOnly(editingItem.timeSlot);
+      const nextSlot = buildTimeSlot(start, safeDuration);
 
-                    <button
-                      onClick={() => {
-                        const ok = window.confirm('Delete this session?');
-                        if (!ok) return;
-                        onDeleteItem(editingItem.id);
-                        setEditingItem(null);
-                      }}
-                      className="w-full py-3 bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 text-rose-600 font-black rounded-xl hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-all"
-                    >
-                      Delete Session
-                    </button>
+      const updatedItem = {
+        ...editingItem,
+        durationMins: safeDuration,
+        timeSlot: nextSlot,
+        isManuallyEdited: true,
+        isLocked: true
+      };
 
-                    <button
-                      onClick={() => setEditingItem(null)}
-                      className="w-full py-3 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-black rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+      await onUpdateItem(editingItem.id, updatedItem);
+      setEditingItem(null);
+
+      if (updatedItem.dateStr) {
+        // 🚫 if past day => do NOT rebalance
+        if (isPastDate(updatedItem.dateStr)) {
+          onRefresh();
+          return;
+        }
+
+        const targetDate = new Date(updatedItem.dateStr + "T00:00:00");
+        await runAutoScheduler("DAY", targetDate);
+        onRefresh();
+      }
+    }}
+    disabled={!!editingItem.dateStr && isPastDate(editingItem.dateStr)}
+    className={`w-full py-3 font-black rounded-xl shadow-lg transition-all
+      ${
+        editingItem.dateStr && isPastDate(editingItem.dateStr)
+          ? "bg-slate-300 text-white cursor-not-allowed"
+          : "bg-brand-600 hover:bg-brand-700 text-white"
+      }`}
+  >
+    Save & Rebalance
+  </button>
+
+  <button
+    onClick={() => {
+      const ok = window.confirm("Delete this session?");
+      if (!ok) return;
+      onDeleteItem(editingItem.id);
+      setEditingItem(null);
+    }}
+    className="w-full py-3 bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 text-rose-600 font-black rounded-xl hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-all"
+  >
+    Delete Session
+  </button>
+
+  <button
+    onClick={() => setEditingItem(null)}
+    className="w-full py-3 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-black rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+  >
+    Cancel
+  </button>
+</div>
+
                 </div>
               );
             })()}
