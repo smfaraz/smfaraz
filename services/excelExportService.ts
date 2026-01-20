@@ -1,6 +1,6 @@
-import { utils, write } from 'xlsx-js-style';
-import { supabase } from '../lib/supabaseClient';
-import { Trainer, Kid, DayOfWeek } from '../types';
+import { utils, write } from "xlsx-js-style";
+import { supabase } from "../lib/supabaseClient";
+import { Trainer, Kid, DayOfWeek } from "../types";
 
 // --- CONFIGURATION: YOUR NEW COLORS ---
 const COLORS: Record<string, string> = {
@@ -21,7 +21,7 @@ const COLORS: Record<string, string> = {
   OFFICE: "FFFFFF",
   HEADER_GREY: "D9D9D9",
   DATE_YELLOW: "FFFF00",
-  TEXT_RED: "FF0000"
+  TEXT_RED: "FF0000",
 };
 
 const DEFAULT_COLOR = "FFFFFF";
@@ -38,12 +38,13 @@ const TIME_SLOTS = [
   { label: "", start: "1:30", end: "2:00" },
   { label: "", start: "2:00", end: "3:00" },
   { label: "", start: "3:00", end: "4:00" },
-  { label: "CLEAN UP", start: "4:00", end: "4:15" }
+  { label: "CLEAN UP", start: "4:00", end: "4:15" },
 ];
 
 // --- HELPERS ---
 
 // Returns minutes from midnight (e.g. 8:30 AM -> 510)
+// ✅ FIXED: if AM/PM missing, treat 1-7 as PM (post-lunch)
 const getMins = (timeStr: string): number => {
   if (!timeStr) return 0;
 
@@ -52,9 +53,16 @@ const getMins = (timeStr: string): number => {
 
   let h = parseInt(match[1]);
   let m = parseInt(match[2]);
+  const meridian = match[3]; // "am" | "pm" | undefined
 
-  if (match[3] === 'pm' && h !== 12) h += 12;
-  if (match[3] === 'am' && h === 12) h = 0;
+  // Normal AM/PM conversion
+  if (meridian === "pm" && h !== 12) h += 12;
+  if (meridian === "am" && h === 12) h = 0;
+
+  // ✅ If AM/PM missing, assume afternoon for 1-7
+  if (!meridian) {
+    if (h >= 1 && h <= 7) h += 12;
+  }
 
   return h * 60 + m;
 };
@@ -62,10 +70,10 @@ const getMins = (timeStr: string): number => {
 const formatTimeFromMins = (mins: number) => {
   let h = Math.floor(mins / 60);
   const m = mins % 60;
-  const period = h >= 12 ? 'PM' : 'AM';
+  const period = h >= 12 ? "PM" : "AM";
   if (h > 12) h -= 12;
   if (h === 0) h = 12;
-  return `${h}:${m.toString().padStart(2, '0')} ${period}`;
+  return `${h}:${m.toString().padStart(2, "0")} ${period}`;
 };
 
 // ALWAYS extract start time from range safely
@@ -108,7 +116,7 @@ const getCellColor = (text: string) => {
 
 const cell = (v: string, opts: any = {}) => ({
   v,
-  t: 's',
+  t: "s",
   s: {
     font: { name: "Calibri", sz: 11, ...(opts.font || {}) },
     alignment: { vertical: "center", horizontal: "center", wrapText: true, ...(opts.align || {}) },
@@ -116,13 +124,33 @@ const cell = (v: string, opts: any = {}) => ({
       top: { style: "thin" },
       bottom: { style: "thin" },
       left: { style: "thin" },
-      right: { style: "thin" }
+      right: { style: "thin" },
     },
-    fill: { fgColor: { rgb: (opts.bg || "FFFFFF") } }
-  }
+    fill: { fgColor: { rgb: opts.bg || "FFFFFF" } },
+  },
 });
 
 const empty = () => ({ v: "", t: "s", s: {} });
+
+// ✅ NEW: show OFF / PTO / SICK before shift timings
+const getTrainerShiftDisplay = (trainer: Trainer, day: DayOfWeek) => {
+  const status = String(trainer.status || "").toUpperCase();
+
+  // Priority 1: Sick
+  if (status === "SICK") return "SICK";
+
+  // Priority 2: PTO
+  if (status === "PTO") return "PTO";
+
+  // Priority 3: Off (day shift says OFF/X)
+  const rawShift = (trainer.shifts as any)?.[day] ?? "";
+  const shiftUpper = String(rawShift).trim().toUpperCase();
+
+  if (!rawShift || shiftUpper === "OFF" || shiftUpper === "X") return "OFF";
+
+  // Priority 4: Normal shift
+  return String(rawShift);
+};
 
 // --- MAIN EXPORT FUNCTION ---
 export const generateClinicalExcel = async (
@@ -140,10 +168,10 @@ export const generateClinicalExcel = async (
   }
 
   const { data: rawSchedule, error } = await supabase
-    .from('schedule_items')
-    .select('*')
-    .gte('date_str', dates[0])
-    .lte('date_str', dates[dates.length - 1]);
+    .from("schedule_items")
+    .select("*")
+    .gte("date_str", dates[0])
+    .lte("date_str", dates[dates.length - 1]);
 
   if (error) {
     console.error("Supabase Export Error:", error);
@@ -152,22 +180,18 @@ export const generateClinicalExcel = async (
   }
 
   const wb = utils.book_new();
-  const activeTrainers = trainers.filter(t => t.status !== 'Sick');
+
+  // NOTE: do NOT filter out sick anymore because we want to show "SICK"
+  const staffForSheet = trainers;
+
   const DAYS = [DayOfWeek.MON, DayOfWeek.TUE, DayOfWeek.WED, DayOfWeek.THU, DayOfWeek.FRI];
 
-  DAYS.forEach(day => {
+  DAYS.forEach((day) => {
     const dateStr = weekDates[day];
     const wsData: any[][] = [];
 
-    // --- HEADER ROWS ---
-    wsData.push([empty(), cell("Sessions can only be up to a max of 120 mins long...", { font: { italic: true, color: { rgb: COLORS.TEXT_RED } }, align: { horizontal: "left" } })]);
-    wsData.push([empty(), cell("There must be a minimum of three 90 min sessions per day...", { font: { italic: true }, align: { horizontal: "left" } })]);
-    wsData.push([empty(), cell("Each child should be given minimum 2 hours of group time...", { font: { italic: true }, align: { horizontal: "left" } })]);
-    wsData.push([empty(), cell("Everyone within a crew must transition at the same time...", { font: { italic: true }, align: { horizontal: "left" } })]);
-    wsData.push([]);
-
     const clientHeader = [empty(), empty(), cell("Client", { font: { bold: true }, bg: COLORS.HEADER_GREY })];
-    kids.forEach(k => clientHeader.push(cell(k.name, { font: { bold: true } })));
+    kids.forEach((k) => clientHeader.push(cell(k.name, { font: { bold: true } })));
     wsData.push(clientHeader);
 
     const scheduleRow = [empty(), empty(), cell("Schedule", { font: { bold: true } })];
@@ -188,7 +212,7 @@ export const generateClinicalExcel = async (
       empty(),
       cell("NOTES", { font: { bold: true } }),
       cell("DATE", { font: { bold: true }, bg: COLORS.DATE_YELLOW }),
-      ...activeTrainers.map(t => cell(t.name, { font: { bold: true }, bg: COLORS.HEADER_GREY }))
+      ...staffForSheet.map((t) => cell(t.name, { font: { bold: true }, bg: COLORS.HEADER_GREY })),
     ];
     wsData.push(staffRow);
 
@@ -196,12 +220,12 @@ export const generateClinicalExcel = async (
       empty(),
       cell("All clients have middles together"),
       cell(dateStr, { bg: COLORS.DATE_YELLOW }),
-      ...activeTrainers.map(t => cell(t.shifts?.[day] || "8:00 - 4:00"))
+      ...staffForSheet.map((t) => cell(getTrainerShiftDisplay(t, day))),
     ];
     wsData.push(dateRow);
 
     // --- GRID ---
-    TIME_SLOTS.forEach(slot => {
+    TIME_SLOTS.forEach((slot) => {
       const row: any[] = [empty()];
       row.push(cell(slot.label, { font: { bold: true } }));
       row.push(cell(`${slot.start}-${slot.end}`, { font: { bold: true } }));
@@ -209,7 +233,7 @@ export const generateClinicalExcel = async (
       const slotStartMins = getMins(slot.start);
       const slotEndMins = getMins(slot.end);
 
-      activeTrainers.forEach(staff => {
+      staffForSheet.forEach((staff) => {
         const item = rawSchedule?.find((s: any) => {
           if (s.date_str !== dateStr || s.trainer_id !== staff.id) return false;
 
@@ -217,7 +241,7 @@ export const generateClinicalExcel = async (
           const sessionStart = getMins(startOnly);
           const sessionEnd = sessionStart + (s.duration_mins || 60);
 
-          return (sessionStart < slotEndMins) && (sessionEnd > slotStartMins);
+          return sessionStart < slotEndMins && sessionEnd > slotStartMins;
         });
 
         if (item) {
@@ -231,12 +255,7 @@ export const generateClinicalExcel = async (
             const startOnly = getStartOnly(item.time_slot || "");
             const showTime = isOddStartTime(startOnly);
 
-            text = formatSessionText(
-              item.kid_name || "",
-              startOnly,
-              item.duration_mins || 60,
-              showTime
-            );
+            text = formatSessionText(item.kid_name || "", startOnly, item.duration_mins || 60, showTime);
           }
 
           row.push(cell(text, { bg: getCellColor(text) }));
@@ -256,13 +275,13 @@ export const generateClinicalExcel = async (
       });
     });
 
-    ws['!ref'] = utils.encode_range({ s: { r: 0, c: 0 }, e: { r: wsData.length, c: 20 } });
-    ws['!cols'] = [{ wch: 2 }, { wch: 20 }, { wch: 18 }, ...activeTrainers.map(() => ({ wch: 24 }))];
+    ws["!ref"] = utils.encode_range({ s: { r: 0, c: 0 }, e: { r: wsData.length, c: 20 } });
+    ws["!cols"] = [{ wch: 2 }, { wch: 20 }, { wch: 18 }, ...staffForSheet.map(() => ({ wch: 24 }))];
     utils.book_append_sheet(wb, ws, String(day));
   });
 
   const fileName = `Clinical_Scheduler_${dates[0]}.xlsx`;
-  const wbout = write(wb, { bookType: 'xlsx', type: 'array' });
+  const wbout = write(wb, { bookType: "xlsx", type: "array" });
   const blob = new Blob([wbout], { type: "application/octet-stream" });
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement("a");

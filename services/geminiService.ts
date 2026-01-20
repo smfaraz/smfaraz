@@ -1,20 +1,37 @@
-import { Trainer, Kid, ScheduleItem, DayOfWeek, SessionType, SessionStatus, Specialty } from "../types";
+import {
+  Trainer,
+  Kid,
+  ScheduleItem,
+  DayOfWeek,
+  SessionType,
+  SessionStatus,
+  Specialty
+} from "../types";
 import { apiService } from "./apiService";
 
 // ============================================================================
 // CONFIG
 // ============================================================================
-const DURATION_CHOICES = [120, 90, 60] as const;
+const DEFAULT_DURATION_CHOICES = [240, 120, 90, 60] as const;
 
 const BREAK_DURATION = 30;
-const TRAVEL_BUFFER_MINS = 60; // ✅ 1 hour
+const TRAVEL_BUFFER_MINS = 60; // 1 hour for HOME
 const MAX_CONSECUTIVE_SESSIONS_BEFORE_BREAK = 2;
+const BREAKS_MAX_PER_DAY = 1;
+
+// Clinic day bounds
+const CLINIC_DAY_START = 465; // 7:45 AM
+const CLINIC_DAY_END = 1080;  // 6:00 PM
+
+// First clinic session must end by 10:00 AM
+const FIRST_SESSION_MUST_END_BY = 600; // 10:00 AM
 
 // ============================================================================
 // UTILITIES
 // ============================================================================
 const safeUUID = () =>
-  (globalThis as any).crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  (globalThis as any).crypto?.randomUUID?.() ??
+  `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -25,7 +42,8 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-// parseTimeStr supports "09:00 AM" or "09:00 AM - 10:00 AM"
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
 const parseTimeStr = (t: string): number => {
   if (!t) return 0;
   const startOnly = t.includes(" - ") ? t.split(" - ")[0].trim() : t.trim();
@@ -58,7 +76,7 @@ const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
   return aStart < bEnd && bStart < aEnd;
 };
 
-// Enum helpers (works for numeric & string enums)
+// Enum helpers
 const enumNames = (e: any) => Object.keys(e).filter((k) => isNaN(Number(k)));
 const enumValues = <T>(e: any): T[] => enumNames(e).map((n) => e[n]) as T[];
 
@@ -72,6 +90,8 @@ const enumNameFromValue = (e: any, value: any): string | undefined => {
 // ============================================================================
 // PARSING SHIFTS / AVAILABILITY
 // Supports: "9:00-12:00 & 1:00-5:00", "IN HOME 4-7"
+// NOTE: For KIDS: IN HOME matters (home session)
+// NOTE: For TRAINERS: IN HOME should NOT force them home-only (we ignore isHome for trainer shift usage)
 // ============================================================================
 const parseShift = (timeStr?: string): { start: number; end: number; isHome?: boolean } | null => {
   if (!timeStr) return null;
@@ -114,7 +134,8 @@ const getDayStringOrValueFromShifts = (shiftsObj: any, dayValue: any) => {
   if (shiftsObj[dayValue] !== undefined) return shiftsObj[dayValue];
   const dayName = enumNameFromValue(DayOfWeek, dayValue);
   if (dayName && shiftsObj[dayName] !== undefined) return shiftsObj[dayName];
-  if (dayName && shiftsObj[dayName.toLowerCase()] !== undefined) return shiftsObj[dayName.toLowerCase()];
+  if (dayName && shiftsObj[dayName.toLowerCase()] !== undefined)
+    return shiftsObj[dayName.toLowerCase()];
   return undefined;
 };
 
@@ -137,8 +158,6 @@ const isCandidateValid = (trainer: Trainer, kid: Kid, sessionType: SessionType):
   return true;
 };
 
-// Travel buffer is enforced by trainer-only booking blocks, but we still prevent
-// selecting a trainer if last session ended too close to this HOME start.
 const respectsTravelBuffer = (
   trainerId: string,
   startTime: number,
@@ -182,7 +201,6 @@ const isKidFreeForDuration = (
   return true;
 };
 
-// Prevent same trainer repeating same kid back-to-back
 const wouldRepeatSameKidBackToBack = (
   trainerId: string,
   kidId: string,
@@ -203,6 +221,12 @@ const wouldRepeatSameKidBackToBack = (
   return prev.kidId === kidId;
 };
 
+const getKidMaxDurationChoices = (kid: Kid) => {
+  const max = Number(kid.sessionDurationMins || 60);
+  // allowed: 60/90/120/240 but <= max
+  return DEFAULT_DURATION_CHOICES.filter((d) => d <= max);
+};
+
 // ============================================================================
 // HARD VALIDATOR
 // ============================================================================
@@ -217,9 +241,11 @@ const assertScheduleValid = (schedule: ScheduleItem[]) => {
 
     const isBreak = s.sessionType === SessionType.BREAK;
     if (isBreak) {
-      if (s.durationMins !== BREAK_DURATION) throw new Error(`Break must be ${BREAK_DURATION} mins: ${s.id}`);
+      if (s.durationMins !== BREAK_DURATION)
+        throw new Error(`Break must be ${BREAK_DURATION} mins: ${s.id}`);
     } else {
-      if (![60, 90, 120].includes(s.durationMins)) throw new Error(`Invalid session duration ${s.durationMins} for ${s.id}`);
+      if (![60, 90, 120, 240].includes(s.durationMins))
+        throw new Error(`Invalid session duration ${s.durationMins} for ${s.id}`);
     }
 
     for (let t = start; t < end; t += 15) {
@@ -249,18 +275,17 @@ export const generateSchedule = async (
   const isRepairMode = kidsToReschedule.length > 0;
 
   const schedule: ScheduleItem[] = [...currentSchedule];
-
   const activeTrainers = trainers.filter((t) => String(t.status) === "Active");
 
-  // Booked slots tracker (trainer + kid)
   const bookedMap = new Set<string>();
 
-  // workload tracking
   const weeklyWorkloadMinutes = new Map<string, number>(); // trainerId -> mins
-  const dailyWorkloadMinutes = new Map<string, number>(); // `${trainerId}-${day}` -> mins
+  const dailyWorkloadMinutes = new Map<string, number>();  // `${trainerId}-${day}` -> mins
 
-  // consecutive session count for breaks
   const consecutiveSessionsCount = new Map<string, number>(); // `${trainerId}-${day}` -> count
+  const breaksUsedToday = new Map<string, number>();          // `${trainerId}-${day}` -> breaks count
+
+  const fatiguedUntil = new Map<string, number>();            // `${trainerId}-${day}` -> blocked until
 
   const bookMinute = (trainerId: string, kidId: string, day: DayOfWeek, t: number) => {
     bookedMap.add(`${trainerId}-${day}-${t}`);
@@ -274,15 +299,15 @@ export const generateSchedule = async (
     bookedMap.add(`${trainerId}-${day}-${t}`);
   };
 
-  const bookTrainerBlock = (trainerId: string, day: DayOfWeek, start: number, end: number) => {
-    for (let t = start; t < end; t += 15) {
-      bookTrainerOnly(trainerId, day, t);
-    }
-  };
-
   const isBooked = (id: string, day: DayOfWeek, t: number) => bookedMap.has(`${id}-${day}-${t}`);
 
-  // Seed bookedMap from currentSchedule
+  const bookTrainerBlock = (trainerId: string, day: DayOfWeek, start: number, end: number) => {
+    const st = clamp(start, 0, 24 * 60);
+    const en = clamp(end, 0, 24 * 60);
+    for (let t = st; t < en; t += 15) bookTrainerOnly(trainerId, day, t);
+  };
+
+  // Seed bookedMap + workloads from currentSchedule
   for (const item of schedule) {
     const start = parseTimeStr(item.timeSlot);
     const end = start + item.durationMins;
@@ -302,7 +327,6 @@ export const generateSchedule = async (
 
     const lastLocations: LocationTracker = new Map();
 
-    // Seed lastLocations from existing schedule items for that day
     const dayExisting = schedule
       .filter((s) => s.day === day)
       .slice()
@@ -311,17 +335,23 @@ export const generateSchedule = async (
     for (const s of dayExisting) {
       const start = parseTimeStr(s.timeSlot);
       const end = start + s.durationMins;
-      lastLocations.set(s.trainerId, { time: end, location: s.sessionType === SessionType.HOME ? "HOME" : "CLINIC" });
+      lastLocations.set(s.trainerId, {
+        time: end,
+        location: s.sessionType === SessionType.HOME ? "HOME" : "CLINIC"
+      });
     }
 
-    // Trainer shifts (we just need working window, not HOME/CLINIC label)
+    // Staff shifts
     const availableStaff = activeTrainers
       .map((t) => {
         const raw = getDayStringOrValueFromShifts((t as any).shifts, day);
         const shift = parseShift(raw);
-        return shift ? { ...t, shift } : null;
+        if (!shift) return null;
+
+        // IMPORTANT: trainer shift is not home-only. ignore shift.isHome
+        return { ...t, shift: { start: shift.start, end: shift.end } };
       })
-      .filter(Boolean) as (Trainer & { shift: { start: number; end: number; isHome?: boolean } })[];
+      .filter(Boolean) as (Trainer & { shift: { start: number; end: number } })[];
 
     // Kids availability
     let kidsToProcess: any[] = isRepairMode
@@ -334,78 +364,95 @@ export const generateSchedule = async (
           })
           .filter(Boolean);
 
-    // If not repair mode, skip already scheduled kids for this day
     if (!isRepairMode) {
       kidsToProcess = kidsToProcess.filter((k) => !schedule.some((s) => s.day === day && s.kidId === k.id));
     }
 
     // ======================================================================
-    // BREAKS (only after 2 consecutive sessions, never before first)
+    // BREAK INSERTION (mandatory after 2 consecutive sessions, only once/day)
     // ======================================================================
-    const insertBreakAfterSession = (trainer: Trainer, sessionEnd: number) => {
+    const tryInsertBreak = (trainer: Trainer, afterTime: number) => {
       const key = `${trainer.id}-${day}`;
       const count = consecutiveSessionsCount.get(key) || 0;
+      const used = breaksUsedToday.get(key) || 0;
 
+      if (used >= BREAKS_MAX_PER_DAY) return false;
       if (count < MAX_CONSECUTIVE_SESSIONS_BEFORE_BREAK) return false;
 
-      // break must be free AFTER session
-      if (!isTrainerFreeForDuration(trainer.id, day, sessionEnd, BREAK_DURATION, isBooked)) return false;
+      // Find a break slot soon after, but only if it fits inside shift
+      // and doesn't overlap anything
+      for (let st = afterTime; st <= afterTime + 180; st += 15) {
+        if (!isTrainerFreeForDuration(trainer.id, day, st, BREAK_DURATION, isBooked)) continue;
 
-      // place break
-      for (let t = sessionEnd; t < sessionEnd + BREAK_DURATION; t += 15) {
-        bookTrainerOnly(trainer.id, day, t);
+        // place break
+        for (let t = st; t < st + BREAK_DURATION; t += 15) bookTrainerOnly(trainer.id, day, t);
+
+        schedule.push({
+          id: safeUUID(),
+          day,
+          timeSlot: buildTimeSlotRange(st, BREAK_DURATION),
+          trainerId: trainer.id,
+          trainerName: trainer.name,
+          kidId: "BREAK",
+          kidName: "BREAK",
+          specialty: Specialty.ABA,
+          sessionType: SessionType.BREAK,
+          durationMins: BREAK_DURATION,
+          status: SessionStatus.CONFIRMED
+        });
+
+        consecutiveSessionsCount.set(key, 0);
+        breaksUsedToday.set(key, used + 1);
+        fatiguedUntil.set(key, st + BREAK_DURATION);
+        return true;
       }
 
-      schedule.push({
-        id: safeUUID(),
-        day,
-        timeSlot: buildTimeSlotRange(sessionEnd, BREAK_DURATION),
-        trainerId: trainer.id,
-        trainerName: trainer.name,
-        kidId: "BREAK",
-        kidName: "BREAK",
-        specialty: Specialty.ABA,
-        sessionType: SessionType.BREAK,
-        durationMins: BREAK_DURATION,
-        status: SessionStatus.CONFIRMED
-      });
-
-      consecutiveSessionsCount.set(key, 0);
-      return true;
+      // Hard enforcement: block them until they can rest
+      fatiguedUntil.set(key, afterTime + BREAK_DURATION);
+      return false;
     };
 
     // ======================================================================
-    // HOME SESSIONS (KID decides home)
+    // PHASE A: CLINIC FIRST SESSION PRIORITY (must end by 10 AM)
     // ======================================================================
+    const clinicKids = kidsToProcess.filter((k: any) => !k.avail?.isHome);
     const homeKids = kidsToProcess.filter((k: any) => k.avail?.isHome);
-    homeKids.sort((a, b) => a.avail.start - b.avail.start);
 
-    for (const kid of homeKids) {
-      let scheduledHome = false;
+    // Schedule first clinic sessions early
+    const clinicKidsEarly = shuffle(clinicKids).sort((a, b) => a.avail.start - b.avail.start);
 
-      for (const duration of DURATION_CHOICES) {
-        const possibleStarts: number[] = [];
-        for (let st = kid.avail.start; st + duration <= kid.avail.end; st += 15) possibleStarts.push(st);
+    for (const kid of clinicKidsEarly) {
+      // already scheduled?
+      if (schedule.some((s) => s.day === day && s.kidId === kid.id)) continue;
 
-        for (const st of shuffle(possibleStarts)) {
+      const choices = getKidMaxDurationChoices(kid);
+      if (choices.length === 0) continue;
+
+      // try to place a session that ends by 10
+      let placed = false;
+
+      for (const duration of choices) {
+        // start must be within availability and end <= 10 AM (priority)
+        const latestStart = Math.min(kid.avail.end - duration, FIRST_SESSION_MUST_END_BY - duration);
+        for (let st = kid.avail.start; st <= latestStart; st += 15) {
+          if (st < CLINIC_DAY_START) continue;
+          if (st + duration > CLINIC_DAY_END) continue;
+
+          // pick trainer
           let candidates = availableStaff.filter((t) => {
-            // must be working
             if (t.shift.start > st || t.shift.end < st + duration) return false;
 
-            // free
+            const fatigueKey = `${t.id}-${day}`;
+            const blockedUntil = fatiguedUntil.get(fatigueKey) || 0;
+            if (st < blockedUntil) return false;
+
             if (!isTrainerFreeForDuration(t.id, day, st, duration, isBooked)) return false;
             if (!isKidFreeForDuration(kid.id, day, st, duration, isBooked)) return false;
 
-            // rules
-            if (!isCandidateValid(t, kid, SessionType.HOME)) return false;
-
-            // avoid repeating same kid back-to-back
+            if (!isCandidateValid(t, kid, SessionType.INDIVIDUAL)) return false;
             if (wouldRepeatSameKidBackToBack(t.id, kid.id, day, st, schedule)) return false;
+            if (!respectsTravelBuffer(t.id, st, SessionType.INDIVIDUAL, lastLocations)) return false;
 
-            // travel buffer from last location
-            if (!respectsTravelBuffer(t.id, st, SessionType.HOME, lastLocations)) return false;
-
-            // caps
             const weekMins = weeklyWorkloadMinutes.get(t.id) || 0;
             const dayMins = dailyWorkloadMinutes.get(`${t.id}-${day}`) || 0;
 
@@ -418,24 +465,18 @@ export const generateSchedule = async (
             return true;
           });
 
-          // Full-time priority (but not forced)
+          // prioritize full-time, but allow others
           candidates = candidates.sort((a, b) => Number(isFullTime(b)) - Number(isFullTime(a)));
-
           const picked = candidates[0];
           if (!picked) continue;
 
-          // Book session
-          for (let tt = st; tt < st + duration; tt += 15) bookMinute(picked.id, kid.id, day, tt);
+          // book
+          for (let t = st; t < st + duration; t += 15) bookMinute(picked.id, kid.id, day, t);
 
-          // Book trainer travel buffers as real-time blocked minutes
-          bookTrainerBlock(picked.id, day, st - TRAVEL_BUFFER_MINS, st);
-          bookTrainerBlock(picked.id, day, st + duration, st + duration + TRAVEL_BUFFER_MINS);
-
-          // update consecutive session count
           const key = `${picked.id}-${day}`;
           consecutiveSessionsCount.set(key, (consecutiveSessionsCount.get(key) || 0) + 1);
 
-          lastLocations.set(picked.id, { time: st + duration, location: "HOME" });
+          lastLocations.set(picked.id, { time: st + duration, location: "CLINIC" });
 
           schedule.push({
             id: safeUUID(),
@@ -446,33 +487,26 @@ export const generateSchedule = async (
             kidId: kid.id,
             kidName: kid.name,
             specialty: Specialty.ABA,
-            sessionType: SessionType.HOME,
+            sessionType: SessionType.INDIVIDUAL,
             durationMins: duration,
             status: SessionStatus.CONFIRMED
           });
 
-          // Insert break after session if needed
-          insertBreakAfterSession(picked, st + duration);
+          // break enforcement
+          tryInsertBreak(picked, st + duration);
 
-          scheduledHome = true;
+          placed = true;
           break;
         }
-
-        if (scheduledHome) break;
+        if (placed) break;
       }
     }
 
-    // remove home kids from clinic scheduling
-    kidsToProcess = kidsToProcess.filter((k: any) => !k.avail?.isHome);
-
     // ======================================================================
-    // CLINIC SESSIONS
+    // PHASE B: CLINIC REMAINING SESSIONS (normal)
     // ======================================================================
-    const clinicKids = kidsToProcess.filter((k: any) => !k.avail?.isHome);
-
-    // timeline 7:45 to 18:00
-    for (let time = 465; time < 1080; time += 15) {
-      const isCircleTime = time >= 540 && time < 600;
+    for (let time = CLINIC_DAY_START; time < CLINIC_DAY_END; time += 15) {
+      const isCircleTime = time >= 540 && time < 600; // 9-10
       const desiredType = isCircleTime ? SessionType.SOCIAL : SessionType.INDIVIDUAL;
 
       const kidsPresent = shuffle(
@@ -482,23 +516,28 @@ export const generateSchedule = async (
       for (const kid of kidsPresent) {
         if (isBooked(kid.id, day, time)) continue;
 
+        const choices = getKidMaxDurationChoices(kid);
+        if (choices.length === 0) continue;
+
         let chosenTrainer: Trainer | null = null;
         let chosenDuration = 60;
 
-        for (const duration of DURATION_CHOICES) {
+        for (const duration of choices) {
           const endTime = time + duration;
           if (endTime > kid.avail.end) continue;
 
           let candidates = availableStaff.filter((t) => {
             if (t.shift.start > time || t.shift.end < endTime) return false;
 
+            const fatigueKey = `${t.id}-${day}`;
+            const blockedUntil = fatiguedUntil.get(fatigueKey) || 0;
+            if (time < blockedUntil) return false;
+
             if (!isTrainerFreeForDuration(t.id, day, time, duration, isBooked)) return false;
             if (!isKidFreeForDuration(kid.id, day, time, duration, isBooked)) return false;
 
             if (!isCandidateValid(t, kid, desiredType)) return false;
-
             if (wouldRepeatSameKidBackToBack(t.id, kid.id, day, time, schedule)) return false;
-
             if (!respectsTravelBuffer(t.id, time, desiredType, lastLocations)) return false;
 
             const weekMins = weeklyWorkloadMinutes.get(t.id) || 0;
@@ -513,9 +552,7 @@ export const generateSchedule = async (
             return true;
           });
 
-          // Full-time priority but allow contract
           candidates = candidates.sort((a, b) => Number(isFullTime(b)) - Number(isFullTime(a)));
-
           if (candidates.length === 0) continue;
 
           chosenTrainer = candidates[0];
@@ -525,8 +562,9 @@ export const generateSchedule = async (
 
         if (!chosenTrainer) continue;
 
-        // Book clinic session
-        for (let t = time; t < time + chosenDuration; t += 15) bookMinute(chosenTrainer.id, kid.id, day, t);
+        for (let t = time; t < time + chosenDuration; t += 15) {
+          bookMinute(chosenTrainer.id, kid.id, day, t);
+        }
 
         const key = `${chosenTrainer.id}-${day}`;
         consecutiveSessionsCount.set(key, (consecutiveSessionsCount.get(key) || 0) + 1);
@@ -547,8 +585,90 @@ export const generateSchedule = async (
           status: SessionStatus.CONFIRMED
         });
 
-        // Insert break after session if needed
-        insertBreakAfterSession(chosenTrainer, time + chosenDuration);
+        tryInsertBreak(chosenTrainer, time + chosenDuration);
+      }
+    }
+
+    // ======================================================================
+    // PHASE C: HOME SESSIONS (after clinic scheduling)
+    // ======================================================================
+    const homeKidsSorted = homeKids.slice().sort((a: any, b: any) => a.avail.start - b.avail.start);
+
+    for (const kid of homeKidsSorted) {
+      let scheduledHome = false;
+
+      const choices = getKidMaxDurationChoices(kid);
+      if (choices.length === 0) continue;
+
+      for (const duration of choices) {
+        const possibleStarts: number[] = [];
+        for (let st = kid.avail.start; st + duration <= kid.avail.end; st += 15) possibleStarts.push(st);
+
+        for (const st of shuffle(possibleStarts)) {
+          let candidates = availableStaff.filter((t) => {
+            if (t.shift.start > st || t.shift.end < st + duration) return false;
+
+            const fatigueKey = `${t.id}-${day}`;
+            const blockedUntil = fatiguedUntil.get(fatigueKey) || 0;
+            if (st < blockedUntil) return false;
+
+            if (!isTrainerFreeForDuration(t.id, day, st, duration, isBooked)) return false;
+            if (!isKidFreeForDuration(kid.id, day, st, duration, isBooked)) return false;
+
+            if (!isCandidateValid(t, kid, SessionType.HOME)) return false;
+            if (wouldRepeatSameKidBackToBack(t.id, kid.id, day, st, schedule)) return false;
+
+            if (!respectsTravelBuffer(t.id, st, SessionType.HOME, lastLocations)) return false;
+
+            const weekMins = weeklyWorkloadMinutes.get(t.id) || 0;
+            const dayMins = dailyWorkloadMinutes.get(`${t.id}-${day}`) || 0;
+
+            const maxWeek = (t.maxHoursPerWeek || 0) * 60;
+            const maxDay = ((t as any).maxDailyHours || 8) * 60;
+
+            if (maxWeek > 0 && weekMins + duration > maxWeek) return false;
+            if (maxDay > 0 && dayMins + duration > maxDay) return false;
+
+            return true;
+          });
+
+          candidates = candidates.sort((a, b) => Number(isFullTime(b)) - Number(isFullTime(a)));
+          const picked = candidates[0];
+          if (!picked) continue;
+
+          // book session minutes
+          for (let tt = st; tt < st + duration; tt += 15) bookMinute(picked.id, kid.id, day, tt);
+
+          // travel buffers (trainer-only blocks)
+          bookTrainerBlock(picked.id, day, st - TRAVEL_BUFFER_MINS, st);
+          bookTrainerBlock(picked.id, day, st + duration, st + duration + TRAVEL_BUFFER_MINS);
+
+          const key = `${picked.id}-${day}`;
+          consecutiveSessionsCount.set(key, (consecutiveSessionsCount.get(key) || 0) + 1);
+
+          lastLocations.set(picked.id, { time: st + duration, location: "HOME" });
+
+          schedule.push({
+            id: safeUUID(),
+            day,
+            timeSlot: buildTimeSlotRange(st, duration),
+            trainerId: picked.id,
+            trainerName: picked.name,
+            kidId: kid.id,
+            kidName: kid.name,
+            specialty: Specialty.ABA,
+            sessionType: SessionType.HOME,
+            durationMins: duration,
+            status: SessionStatus.CONFIRMED
+          });
+
+          tryInsertBreak(picked, st + duration);
+
+          scheduledHome = true;
+          break;
+        }
+
+        if (scheduledHome) break;
       }
     }
   }
@@ -622,7 +742,9 @@ export const runAutoScheduler = async (
       const finalKeepers = keepers.filter((k) => k.id !== manualItem.id);
       finalKeepers.push(manualItem);
 
-      const displacedKidIds = new Set(displacedItems.map((i) => i.kidId).filter((id) => id && id !== "BREAK"));
+      const displacedKidIds = new Set(
+        displacedItems.map((i) => i.kidId).filter((id) => id && id !== "BREAK")
+      );
       const kidsToReschedule = kids.filter((k) => displacedKidIds.has(k.id));
 
       if (kidsToReschedule.length === 0) {
