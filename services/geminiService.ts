@@ -15,17 +15,17 @@ import { apiService } from "./apiService";
 const DEFAULT_DURATION_CHOICES = [240, 120, 90, 60] as const; 
 
 const BREAK_DURATION = 30;
-const TRAVEL_BUFFER_MINS = 30; 
-const MAX_CONSECUTIVE_SESSIONS_BEFORE_BREAK = 2; // Strict limit
-const BREAKS_MAX_PER_DAY = 1;
+// ✅ UPDATED: Travel Buffer is now 60 minutes
+const TRAVEL_BUFFER_MINS = 60; 
 
-// If less than 45 mins remain in shift, don't force a break.
-const MIN_TIME_REMAINING_FOR_BREAK = 45; 
+const MAX_CONSECUTIVE_SESSIONS_BEFORE_BREAK = 2; 
+const BREAKS_MAX_PER_DAY = 1;
+const MIN_TIME_REMAINING_FOR_BREAK = 90; 
 
 const CLINIC_DAY_START = 465; // 7:45 AM
 const CLINIC_DAY_END = 1110;  // 6:30 PM
-
 const CONSTRAINT_10_AM_MINS = 600; 
+const ANCHOR_2PM_MINS = 14 * 60; // 840 mins
 
 // ============================================================================
 // UTILITIES
@@ -37,18 +37,9 @@ const safeUUID = () => {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
 const parseTimeStr = (t: string): number => {
   if (!t) return 0;
-  const cleanStr = t.replace(/HOM|IN HOME|In-home|In-center/gi, "").trim();
+  const cleanStr = t.replace(/HOM|IN HOME|In-home|In-center|TRAVEL/gi, "").trim();
   const startOnly = cleanStr.includes(" - ") ? cleanStr.split(" - ")[0].trim() : cleanStr.trim();
   const upper = startOnly.toUpperCase();
   const isPM = upper.includes("PM");
@@ -130,7 +121,7 @@ const getDayStringOrValueFromShifts = (shiftsObj: any, dayValue: any) => {
 };
 
 // ============================================================================
-// VALIDATION & HELPERS
+// HELPERS
 // ============================================================================
 type LocationTracker = Map<string, { time: number; location: "CLINIC" | "HOME" }>;
 
@@ -144,22 +135,6 @@ const isCandidateValid = (trainer: Trainer, kid: Kid, sessionType: SessionType):
     if (kid.inHomeAllowedStaffIds && kid.inHomeAllowedStaffIds.length > 0) {
       if (!kid.inHomeAllowedStaffIds.includes(trainer.id)) return false;
     }
-  }
-  return true;
-};
-
-const respectsTravelBuffer = (
-  trainerId: string,
-  startTime: number,
-  sessionType: SessionType,
-  lastLocations: LocationTracker
-) => {
-  const last = lastLocations.get(trainerId);
-  if (!last) return true;
-  const currentLoc = sessionType === SessionType.HOME ? "HOME" : "CLINIC";
-  if (last.location !== currentLoc) {
-      const gap = startTime - last.time;
-      return gap >= TRAVEL_BUFFER_MINS;
   }
   return true;
 };
@@ -217,7 +192,7 @@ export const generateSchedule = async (
 
   const isBooked = (id: string, day: DayOfWeek, t: number) => bookedMap.has(`${id}-${day}-${t}`);
 
-  // Seed existing schedule
+  // Seed existing
   for (const item of schedule) {
     const start = parseTimeStr(item.timeSlot);
     const end = start + item.durationMins;
@@ -276,28 +251,89 @@ export const generateSchedule = async (
       let currentTime = Math.max(kid.avail.start, CLINIC_DAY_START);
       const endTime = Math.min(kid.avail.end, CLINIC_DAY_END);
       let isFirstSession = true;
-      let lastTrainerId: string | null = null; // ✅ Track previous trainer to shuffle
+      let lastTrainerId: string | null = null; 
 
-      // --- IN-HOME ---
+      // --------------------------------------------------------
+      // SPECIAL PROTOCOL: 120 MINUTE KIDS (2 PM ANCHOR)
+      // --------------------------------------------------------
+      const is120MinProtocol = kid.sessionDurationMins === 120;
+      if (is120MinProtocol && !kid.avail.isHome) {
+          if (!isBooked(kid.id, day, ANCHOR_2PM_MINS)) {
+             const anchorStart = ANCHOR_2PM_MINS;
+             const anchorDur = 120;
+             
+             const anchorCandidates = availableStaff.filter(t => {
+                 if (t.shift.start > anchorStart || t.shift.end < anchorStart + anchorDur) return false;
+                 if (!isTrainerFreeForDuration(t.id, day, anchorStart, anchorDur, isBooked)) return false;
+                 if (!isCandidateValid(t, kid, SessionType.INDIVIDUAL)) return false;
+                 return true;
+             });
+
+             if (anchorCandidates.length > 0) {
+                 anchorCandidates.sort((a,b) => (a.id === lastTrainerId ? 1 : 0) - (b.id === lastTrainerId ? 1 : 0));
+                 const picked = anchorCandidates[0];
+                 
+                 for (let t = anchorStart; t < anchorStart + anchorDur; t += 15) bookMinute(picked.id, kid.id, day, t);
+                 schedule.push({
+                    id: safeUUID(), day, timeSlot: buildTimeSlotRange(anchorStart, anchorDur),
+                    trainerId: picked.id, trainerName: picked.name,
+                    kidId: kid.id, kidName: kid.name, specialty: Specialty.ABA,
+                    sessionType: SessionType.INDIVIDUAL, durationMins: anchorDur, status: SessionStatus.CONFIRMED
+                 });
+                 
+                 const key = `${picked.id}-${day}`;
+                 consecutiveSessionsCount.set(key, (consecutiveSessionsCount.get(key)||0)+1);
+             }
+          }
+      }
+
+      // --------------------------------------------------------
+      // IN-HOME WITH TRAVEL BUFFER (60 MINS)
+      // --------------------------------------------------------
       if (kid.avail.isHome) {
          const durations = getKidMaxDurationChoices(kid);
          for (const dur of durations) {
             let placed = false;
             for (let st = currentTime; st + dur <= endTime; st += 15) {
+                
+                // ✅ Calculate Travel Buffer
+                const bufferStart = st - TRAVEL_BUFFER_MINS;
+
                 const candidates = availableStaff.filter(t => {
-                    if (t.shift.start > st || t.shift.end < st + dur) return false;
+                    // 1. Shift MUST cover Travel + Session
+                    if (t.shift.start > bufferStart || t.shift.end < st + dur) return false;
+                    
+                    // 2. Must be free for Travel AND Session
+                    if (!isTrainerFreeForDuration(t.id, day, bufferStart, TRAVEL_BUFFER_MINS, isBooked)) return false;
                     if (!isTrainerFreeForDuration(t.id, day, st, dur, isBooked)) return false;
+
                     if (!isCandidateValid(t, kid, SessionType.HOME)) return false;
-                    if (!respectsTravelBuffer(t.id, st, SessionType.HOME, lastLocations)) return false;
+                    
+                    // No travel buffer check needed here since we explicitly book travel
                     return true;
                 });
                 
                 if (candidates.length > 0) {
                     const picked = candidates[0];
-                    for (let t = st; t < st + dur; t += 15) bookMinute(picked.id, kid.id, day, t);
-                    for (let t = st - TRAVEL_BUFFER_MINS; t < st; t+=15) bookTrainerOnly(picked.id, day, t);
-                    for (let t = st + dur; t < st + dur + TRAVEL_BUFFER_MINS; t+=15) bookTrainerOnly(picked.id, day, t);
 
+                    // A. Book Travel Tile
+                    for (let t = bufferStart; t < st; t+=15) bookTrainerOnly(picked.id, day, t);
+                    schedule.push({
+                        id: safeUUID(),
+                        day,
+                        timeSlot: buildTimeSlotRange(bufferStart, TRAVEL_BUFFER_MINS),
+                        trainerId: picked.id,
+                        trainerName: picked.name,
+                        kidId: "ADMIN", // Use ADMIN ID to prevent DB issues
+                        kidName: "TRAVEL", // Visible Label
+                        specialty: Specialty.ABA,
+                        sessionType: SessionType.ADMIN,
+                        durationMins: TRAVEL_BUFFER_MINS,
+                        status: SessionStatus.CONFIRMED
+                    });
+
+                    // B. Book Session
+                    for (let t = st; t < st + dur; t += 15) bookMinute(picked.id, kid.id, day, t);
                     schedule.push({
                         id: safeUUID(),
                         day,
@@ -311,6 +347,7 @@ export const generateSchedule = async (
                         durationMins: dur,
                         status: SessionStatus.CONFIRMED
                     });
+
                     placed = true;
                     break;
                 }
@@ -320,54 +357,48 @@ export const generateSchedule = async (
          continue; 
       }
 
-      // --- CLINIC ---
+      // --- CLINIC LOOP ---
       while (currentTime < endTime) {
         
-        let bestDuration = 60;
-        const remaining = endTime - currentTime;
-
-        // 10 AM Constraint
-        let maxAllowedDuration = remaining;
-        if (isFirstSession && currentTime < CONSTRAINT_10_AM_MINS) {
-            const timeTo10 = CONSTRAINT_10_AM_MINS - currentTime;
-            maxAllowedDuration = Math.min(remaining, timeTo10);
+        if (isBooked(kid.id, day, currentTime)) {
+            currentTime += 15;
+            continue;
         }
 
-        const validDurations = getKidMaxDurationChoices(kid).filter(d => d <= maxAllowedDuration);
-        if (validDurations.length > 0) bestDuration = Math.max(...validDurations);
-        else {
-             if (maxAllowedDuration >= 30) bestDuration = maxAllowedDuration; 
-             else break; 
+        let bestDuration = 60;
+        
+        if (is120MinProtocol) {
+            bestDuration = 90; // Fillers are 90 mins for these kids
+        } else {
+            const remaining = endTime - currentTime;
+            let maxAllowedDuration = remaining;
+            if (isFirstSession && currentTime < CONSTRAINT_10_AM_MINS) {
+                const timeTo10 = CONSTRAINT_10_AM_MINS - currentTime;
+                maxAllowedDuration = Math.min(remaining, timeTo10);
+            }
+            const validDurations = getKidMaxDurationChoices(kid).filter(d => d <= maxAllowedDuration);
+            if (validDurations.length > 0) bestDuration = Math.max(...validDurations);
+            else {
+                if (maxAllowedDuration >= 30) bestDuration = maxAllowedDuration; 
+                else { currentTime += 15; continue; }
+            }
         }
 
         const candidates = availableStaff.filter(t => {
-            // 1. Basic Validity
             if (t.shift.start > currentTime || t.shift.end < currentTime + bestDuration) return false;
             if (!isTrainerFreeForDuration(t.id, day, currentTime, bestDuration, isBooked)) return false;
             if (!isCandidateValid(t, kid, SessionType.INDIVIDUAL)) return false;
             
             const fatigueKey = `${t.id}-${day}`;
-            
-            // 2. Strict Fatigue Check: Are they currently on a mandatory break?
             if (currentTime < (fatiguedUntil.get(fatigueKey) || 0)) return false;
 
-            // 3. 🔥 CRITICAL BREAK ENFORCEMENT: 
-            // If they have hit the limit, they CANNOT be a candidate unless it's end of shift.
             const sessionsDone = consecutiveSessionsCount.get(fatigueKey) || 0;
             const breaksDone = breaksUsedToday.get(fatigueKey) || 0;
-            
             if (sessionsDone >= MAX_CONSECUTIVE_SESSIONS_BEFORE_BREAK && breaksDone < BREAKS_MAX_PER_DAY) {
                 const minsRemainingInShift = t.shift.end - currentTime;
-                
-                // If they have substantial time left, they MUST take a break now.
-                // Therefore, they are NOT a candidate for a kid session.
-                if (minsRemainingInShift > MIN_TIME_REMAINING_FOR_BREAK) {
-                    return false;
-                }
-                // If < 45 mins left, we allow them to power through (End of Day exception)
+                if (minsRemainingInShift > MIN_TIME_REMAINING_FOR_BREAK) return false; 
             }
 
-            // 4. Workload Check
             const weekMins = weeklyWorkloadMinutes.get(t.id) || 0;
             const maxWeek = (t.maxHoursPerWeek || 0) * 60;
             if (maxWeek > 0 && weekMins + bestDuration > maxWeek) return false;
@@ -375,43 +406,30 @@ export const generateSchedule = async (
             return true;
         });
 
-        // ✅ 5. SHUFFLE / ROTATION LOGIC
-        candidates.sort((a, b) => {
-            // A. Avoid immediate repeats (Burnout Prevention)
-            const isRepeatA = a.id === lastTrainerId;
-            const isRepeatB = b.id === lastTrainerId;
-            if (isRepeatA && !isRepeatB) return 1; // A is repeat, push down
-            if (!isRepeatA && isRepeatB) return -1; // B is repeat, push down
+        // SHUFFLE & ROTATE
+        const freshCandidates = candidates.filter(t => t.id !== lastTrainerId);
+        const repeatCandidates = candidates.filter(t => t.id === lastTrainerId);
+        const pool = freshCandidates.length > 0 ? freshCandidates : repeatCandidates;
 
-            // B. Priority: Full Time Staff
+        pool.sort((a, b) => {
             const ftA = isFullTime(a) ? 1 : 0;
             const ftB = isFullTime(b) ? 1 : 0;
             if (ftA !== ftB) return ftB - ftA;
-
-            // C. Randomness
             return Math.random() - 0.5; 
         });
 
-        if (candidates.length > 0) {
-            const picked = candidates[0];
-            lastTrainerId = picked.id; // ✅ Update last trainer
+        if (pool.length > 0) {
+            const picked = pool[0];
+            lastTrainerId = picked.id; 
 
             for (let t = currentTime; t < currentTime + bestDuration; t += 15) {
                 bookMinute(picked.id, kid.id, day, t);
             }
 
             schedule.push({
-                id: safeUUID(),
-                day,
-                timeSlot: buildTimeSlotRange(currentTime, bestDuration),
-                trainerId: picked.id,
-                trainerName: picked.name,
-                kidId: kid.id,
-                kidName: kid.name,
-                specialty: Specialty.ABA,
-                sessionType: SessionType.INDIVIDUAL,
-                durationMins: bestDuration,
-                status: SessionStatus.CONFIRMED
+                id: safeUUID(), day, timeSlot: buildTimeSlotRange(currentTime, bestDuration),
+                trainerId: picked.id, trainerName: picked.name, kidId: kid.id, kidName: kid.name,
+                specialty: Specialty.ABA, sessionType: SessionType.INDIVIDUAL, durationMins: bestDuration, status: SessionStatus.CONFIRMED
             });
 
             isFirstSession = false;
@@ -421,41 +439,21 @@ export const generateSchedule = async (
             consecutiveSessionsCount.set(key, newCount);
             lastLocations.set(picked.id, { time: currentTime + bestDuration, location: "CLINIC" });
 
-            // ✅ TRIGGER BREAK / ADMIN
             const breaks = breaksUsedToday.get(key) || 0;
-
             if (newCount >= MAX_CONSECUTIVE_SESSIONS_BEFORE_BREAK && breaks < BREAKS_MAX_PER_DAY) {
                 const breakStart = currentTime + bestDuration;
                 const trainerShiftEnd = picked.shift.end;
                 const minsRemainingInShift = trainerShiftEnd - breakStart;
                 
-                // Only insert break if NOT end of day
                 if (minsRemainingInShift > MIN_TIME_REMAINING_FOR_BREAK) {
-                    // Logic: Is it End of Day?
-                    let isEndOfDay = false;
-                    if (breakStart + BREAK_DURATION >= trainerShiftEnd - 15) isEndOfDay = true;
-
-                    const sessionType = isEndOfDay ? SessionType.ADMIN : SessionType.BREAK;
-                    const sessionName = isEndOfDay ? "Admin / Cleaning" : "BREAK";
-                    const kidName = isEndOfDay ? "ADMIN" : "BREAK";
-                    
-                    const duration = isEndOfDay ? Math.min(minsRemainingInShift, 60) : BREAK_DURATION;
-
-                    if (duration > 0 && isTrainerFreeForDuration(picked.id, day, breakStart, duration, isBooked)) {
+                    const duration = BREAK_DURATION;
+                    if (isTrainerFreeForDuration(picked.id, day, breakStart, duration, isBooked)) {
                         for (let t = breakStart; t < breakStart + duration; t+=15) bookTrainerOnly(picked.id, day, t);
                         
                         schedule.push({
-                            id: safeUUID(),
-                            day,
-                            timeSlot: buildTimeSlotRange(breakStart, duration),
-                            trainerId: picked.id,
-                            trainerName: picked.name,
-                            kidId: kidName,
-                            kidName: kidName,
-                            specialty: Specialty.ABA,
-                            sessionType: sessionType,
-                            durationMins: duration,
-                            status: SessionStatus.CONFIRMED
+                            id: safeUUID(), day, timeSlot: buildTimeSlotRange(breakStart, duration),
+                            trainerId: picked.id, trainerName: picked.name, kidId: "BREAK", kidName: "BREAK",
+                            specialty: Specialty.ABA, sessionType: SessionType.BREAK, durationMins: duration, status: SessionStatus.CONFIRMED
                         });
 
                         consecutiveSessionsCount.set(key, 0);
@@ -463,7 +461,6 @@ export const generateSchedule = async (
                         fatiguedUntil.set(key, breakStart + duration);
                     }
                 } else {
-                    // Reset count to allow them to finish shift
                     consecutiveSessionsCount.set(key, 0);
                 }
             }
@@ -472,12 +469,7 @@ export const generateSchedule = async (
         } else {
             // RUBBER-BANDING
             let gapFilled = false;
-            
-            const lastSessionIndex = schedule.findIndex(s => 
-                s.kidId === kid.id && 
-                s.day === day && 
-                parseTimeStr(s.timeSlot) + s.durationMins === currentTime
-            );
+            const lastSessionIndex = schedule.findIndex(s => s.kidId === kid.id && s.day === day && parseTimeStr(s.timeSlot) + s.durationMins === currentTime);
 
             if (lastSessionIndex !== -1) {
                 const lastSession = schedule[lastSessionIndex];
@@ -491,14 +483,12 @@ export const generateSchedule = async (
                    const shift = parseShift(shiftRaw);
                    const isShiftValid = shift && shift.end >= newEndTime;
                    const isTrainerFree = !isBooked(trainer.id, day, currentTime); 
-                   // Rubber banding ignores fatigue momentarily to fill a small gap
                    const isWithinMaxDaily = ((dailyWorkloadMinutes.get(`${trainer.id}-${day}`) || 0) + extendBy) <= ((trainer.maxDailyHours || 8) * 60);
 
                    if (isShiftValid && isTrainerFree && isWithinMaxDaily) {
                        bookMinute(trainer.id, kid.id, day, currentTime);
                        schedule[lastSessionIndex] = {
-                           ...lastSession,
-                           durationMins: newDuration,
+                           ...lastSession, durationMins: newDuration,
                            timeSlot: buildTimeSlotRange(parseTimeStr(lastSession.timeSlot), newDuration)
                        };
                        weeklyWorkloadMinutes.set(trainer.id, (weeklyWorkloadMinutes.get(trainer.id) || 0) + extendBy);
@@ -509,9 +499,7 @@ export const generateSchedule = async (
                    }
                 }
             }
-
             if (!gapFilled) {
-                console.log(`⚠️ Unfillable Gap for ${kid.name} at ${formatTime(currentTime)}`);
                 currentTime += 15;
             }
         }
@@ -519,9 +507,34 @@ export const generateSchedule = async (
     }
   }
 
-  const dayOrder = enumValues<DayOfWeek>(DayOfWeek);
+  // ==========================================================================
+  // POST-PROCESSING: CLEANUP OFFICE WORK
+  // ==========================================================================
+  for (const day of ALL_DAYS) {
+      for (const trainer of activeTrainers) {
+          const shiftRaw = getDayStringOrValueFromShifts(trainer.shifts, day);
+          const shift = parseShift(shiftRaw);
+          if (!shift) continue;
+
+          const sessions = schedule.filter(s => s.day === day && s.trainerId === trainer.id);
+          if (sessions.length === 0) continue;
+
+          sessions.sort((a,b) => parseTimeStr(a.timeSlot) - parseTimeStr(b.timeSlot));
+          
+          const lastSession = sessions[sessions.length - 1];
+          if (lastSession.sessionType === SessionType.BREAK) {
+              const newDuration = shift.end - parseTimeStr(lastSession.timeSlot);
+              lastSession.sessionType = SessionType.ADMIN;
+              lastSession.kidName = "OFFICE WORK";
+              lastSession.kidId = "OFFICE";
+              lastSession.durationMins = newDuration;
+              lastSession.timeSlot = buildTimeSlotRange(parseTimeStr(lastSession.timeSlot), newDuration);
+          }
+      }
+  }
+
   schedule.sort((a, b) => {
-    const dDiff = dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day);
+    const dDiff = ALL_DAYS.indexOf(a.day) - ALL_DAYS.indexOf(b.day);
     if (dDiff !== 0) return dDiff;
     return parseTimeStr(a.timeSlot) - parseTimeStr(b.timeSlot);
   });
