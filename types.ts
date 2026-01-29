@@ -12,6 +12,8 @@ export enum ClinicalRole {
   BCBA = 'BCBA'
 }
 
+// REMOVED: export enum Crew { ... }
+
 export enum Specialty {
   SPEECH = 'Speech Therapy',
   OT = 'Occupational Therapy',
@@ -66,6 +68,7 @@ export interface Trainer {
   username: string;
   password: string;
   clinicalRole: ClinicalRole;
+  // REMOVED: crew: Crew;
   specialties: Specialty[];
   maxHoursPerWeek: number;
   shifts: WeeklySchedule; 
@@ -73,7 +76,6 @@ export interface Trainer {
   status: StaffStatus;
   excludeClientGender?: string;
   maxDailyHours?: number;
-  is_full_time?: boolean; // ✅ Added to match your DB/CSV
 }
 
 export interface Kid {
@@ -82,6 +84,7 @@ export interface Kid {
   name: string;
   parentUsername: string;
   parentPassword: string;
+  // REMOVED: crew: Crew;
   requiredSpecialties: Specialty[];
   sessionsPerWeek: number;
   sessionDurationMins: number;
@@ -91,7 +94,7 @@ export interface Kid {
   availability: WeeklySchedule;
   currentStatus?: 'CHECKED_IN' | 'CHECKED_OUT';
   gender?: string;
-  inHomeAllowedStaffIds?: string[]; // ✅ Added to match your DB/CSV
+  inHomeAllowedStaffIds?: string[]; 
   maxSessionMins?: number;
   conflictHistoryKids?: string[];
 }
@@ -99,7 +102,7 @@ export interface Kid {
 export interface ScheduleItem {
   id: string;
   day: DayOfWeek;
-  dateStr?: string;
+  dateStr?: string; // ✅ ADD THIS FIELD
   timeSlot: string;
   trainerId: string;
   trainerName: string;

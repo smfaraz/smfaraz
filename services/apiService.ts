@@ -77,7 +77,7 @@ const mapScheduleFromDB = (s: any): ScheduleItem => ({
   dateStr: s.date_str,
   trainerId: s.trainer_id || "unassigned",
   trainerName: s.trainer_name || "Unassigned",
-  // If kid_id is null (Break/Office), use a placeholder string to keep UI happy
+  // If kid_id is null (Break/Office), use a placeholder string
   kidId: s.kid_id || "system_placeholder", 
   kidName: s.kid_name,
   sessionType: s.session_type,
@@ -85,21 +85,10 @@ const mapScheduleFromDB = (s: any): ScheduleItem => ({
   isLocked: s.is_locked,
 });
 
-// ✅ FIX 2: Convert ALL System IDs to NULL before DB Insert
+// ✅ FIX 2: Convert "BREAK" / "OFFICE" IDs to NULL before DB Insert
 const mapScheduleToDB = (s: Partial<ScheduleItem>) => {
-  // Checks for ANY non-UUID string we might use for breaks/admin
-  const isSystemId = (id?: string) => {
-     if (!id) return true;
-     const systemIds = [
-        "BREAK", 
-        "OFFICE", 
-        "ADMIN", 
-        "ADMIN / CLEANING", 
-        "system_placeholder", 
-        "unassigned"
-     ];
-     return systemIds.includes(id);
-  };
+  // Check if ID is a fake system ID
+  const isSystemId = (id?: string) => id === "BREAK" || id === "OFFICE" || id === "ADMIN";
 
   return clean({
     id: s.id,
@@ -108,7 +97,7 @@ const mapScheduleToDB = (s: Partial<ScheduleItem>) => {
     date_str: s.dateStr,
     trainer_id: s.trainerId === "unassigned" ? null : s.trainerId,
     trainer_name: s.trainerName,
-    // 🔥 CRITICAL FIX: Send NULL if it's ANY system slot
+    // 🔥 CRITICAL FIX: Send NULL if it's a Break/Office slot
     kid_id: isSystemId(s.kidId) ? null : s.kidId,
     kid_name: s.kidName,
     specialty: s.specialty,
